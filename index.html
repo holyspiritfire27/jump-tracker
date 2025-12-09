@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AI 垂直跳高測驗 (Web版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
+        
+        /* 影片與畫布層疊 */
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); } /* 鏡像翻轉 */
+        canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        
+        /* UI 介面層 (不翻轉) */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
+        /* 輸入選單 */
+        #setup-panel {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9); padding: 20px; border-radius: 15px;
+            text-align: center; pointer-events: auto; width: 80%; max-width: 400px;
+        }
+        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 80%; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 18px; border-radius: 5px; cursor: pointer; }
+        button:active { background: #0056b3; }
+
+        /* 資訊顯示 */
+        #info-box {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(0, 0, 0, 0.6); color: white;
+            padding: 10px; border-radius: 8px; text-align: right;
+        }
+        .big-text { font-size: 24px; font-weight: bold; }
+        .green { color: #0f0; }
+        .orange { color: orange; }
+        .red { color: #ff4444; }
+
+        /* 控制按鈕 (下方) */
+        #controls {
+            position: absolute; bottom: 20px; width: 100%; text-align: center; pointer-events: auto;
+        }
+        .btn-round {
+            background: rgba(255, 255, 255, 0.2); border: 2px solid white; color: white;
+            width: 60px; height: 60px; border-radius: 50%; margin: 0 10px; font-size: 14px;
+        }
+        
+        /* 指引文字 */
+        #guide-text {
+            position: absolute; bottom: 100px; width: 100%; text-align: center;
+            font-size: 24px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas>
+    
+    <div id="ui-layer">
+        <div id="setup-panel">
+            <h2>跳高測驗設定</h2>
+            <input type="text" id="p_name" placeholder="受測者姓名">
+            <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
+            <select id="p_gender">
+                <option value="male">男</option>
+                <option value="female">女</option>
+            </select>
+            <br>
+            <button onclick="startApp()">開始測驗</button>
+            <p style="font-size:12px; color:gray;">請將手機固定於腰部高度，距離約 3 公尺</p>
+        </div>
+
+        <div id="info-box" style="display:none;">
+            <div id="disp-name">姓名: --</div>
+            <div>目前: <span id="disp-curr" class="green big-text">0.0</span> cm</div>
+            <div>最高: <span id="disp-max" class="orange big-text">0.0</span> cm</div>
+            <div id="disp-rating">評級: --</div>
+        </div>
+        
+        <div id="guide-text" style="display:none;">啟動中...</div>
+
+        <div id="controls" style="display:none;">
+            <button class="btn-round" onclick="resetTest()">重測<br>(R)</button>
+            <button class="btn-round" onclick="location.reload()">換人<br>(N)</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 變數初始化 ---
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    
+    let userHeight = 170;
+    let userName = "";
+    let userGender = "male";
+    
+    // 狀態機: 0=待機, 1=身高校正, 2=摸高鎖定, 3=跳躍
+    let state = 0; 
+    let pixelsPerCm = 0;
+    let standingReachY = 0;
+    let maxJumpCm = 0;
+    let currJumpCm = 0; // 平滑顯示用
+
+    // 穩定度緩衝
+    let stabilityQueue = [];
+    let reachQueue = [];
+    const FRAMES_TO_LOCK = 30; // Web版幀率較不穩，稍微降低一點
+    const STABILITY_THRES = 0.05; // 比例值 (相對於畫布高度)
+
+    // --- MediaPipe 設定 ---
+    const pose = new Pose({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+    }});
+    
+    pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+    
+    pose.onResults(onResults);
+
+    // --- 啟動函式 ---
+    function startApp() {
+        userName = document.getElementById('p_name').value || "測試者";
+        userHeight = parseFloat(document.getElementById('p_height').value);
+        userGender = document.getElementById('p_gender').value;
+        
+        if(!userHeight || userHeight < 50) { alert("請輸入正確身高"); return; }
+        
+        document.getElementById('setup-panel').style.display = 'none';
+        document.getElementById('info-box').style.display = 'block';
+        document.getElementById('controls').style.display = 'block';
+        document.getElementById('guide-text').style.display = 'block';
+        document.getElementById('disp-name').innerText = `姓名: ${userName}`;
+
+        // 啟動相機
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+        state = 1; // 進入步驟1
+    }
+
+    // --- 核心迴圈 (每一幀) ---
+    function onResults(results) {
+        // 設定畫布大小
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        const w = canvasElement.width;
+        const h = canvasElement.height;
+        
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, w, h);
+        
+        // 繪製骨架連線
+        if (results.poseLandmarks) {
+            // 只在步驟 1 (全身校正) 畫全身，避免測驗時太亂
+            if(state === 1) {
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#FF0000', lineWidth: 1});
+            }
+            
+            // 取得關鍵點 (Y軸向下為正，0~1)
+            const lm = results.poseLandmarks;
+            const heelY = (lm[29].y + lm[30].y) / 2;
+            const eyeY = (lm[2].y + lm[5].y) / 2;
+            
+            // 手指尖端 (取最高點 = Y值最小)
+            const leftIdxY = lm[19].y;
+            const rightIdxY = lm[20].y;
+            const handTopY = Math.min(leftIdxY, rightIdxY);
+            
+            // 活躍手的位置 (用於畫圈)
+            const activeHandIdx = leftIdxY < rightIdxY ? 19 : 20;
+            const handX = lm[activeHandIdx].x * w;
+            const handY = lm[activeHandIdx].y * h;
+
+            // --- 狀態機邏輯 ---
+            const guide = document.getElementById('guide-text');
+
+            // 【步驟 1: 身高校正】
+            if (state === 1) {
+                guide.innerText = "步驟1: 請自然站立 (校正身高)";
+                guide.style.color = "yellow";
+                
+                // 檢查全身入鏡 (腳跟與眼睛都在畫面內)
+                if (lm[29].visibility > 0.5 &&
