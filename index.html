@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (Web版)</title>
+    <title>AI 垂直跳高測驗 (V11防禦版)</title>
+    
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
@@ -12,60 +13,67 @@
     <style>
         body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
         
-        /* 影片與畫布層疊 */
         #container { position: relative; width: 100vw; height: 100vh; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); } /* 鏡像翻轉 */
+        /* 讓影片和畫布重疊並鏡像翻轉 */
+        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
         canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
         
-        /* UI 介面層 (不翻轉) */
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
-        /* 輸入選單 */
         #setup-panel {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(255, 255, 255, 0.9); padding: 20px; border-radius: 15px;
-            text-align: center; pointer-events: auto; width: 80%; max-width: 400px;
+            background: rgba(255, 255, 255, 0.95); padding: 25px; border-radius: 15px;
+            text-align: center; pointer-events: auto; width: 85%; max-width: 350px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 80%; }
-        button { background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 18px; border-radius: 5px; cursor: pointer; }
+        
+        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 90%; border: 1px solid #ccc; border-radius: 5px; }
+        
+        button { 
+            background: #007bff; color: white; border: none; padding: 12px 30px; 
+            font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%;
+        }
         button:active { background: #0056b3; }
+        button:disabled { background: #ccc; }
 
-        /* 資訊顯示 */
         #info-box {
             position: absolute; top: 10px; right: 10px;
             background: rgba(0, 0, 0, 0.6); color: white;
             padding: 10px; border-radius: 8px; text-align: right;
+            pointer-events: none;
         }
-        .big-text { font-size: 24px; font-weight: bold; }
-        .green { color: #0f0; }
-        .orange { color: orange; }
-        .red { color: #ff4444; }
+        .big-text { font-size: 26px; font-weight: bold; }
+        .green { color: #0f0; } .orange { color: orange; } .red { color: #ff4444; }
 
-        /* 控制按鈕 (下方) */
+        #guide-text {
+            position: absolute; bottom: 100px; width: 100%; text-align: center;
+            font-size: 22px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold;
+            pointer-events: none;
+        }
+        
         #controls {
             position: absolute; bottom: 20px; width: 100%; text-align: center; pointer-events: auto;
         }
         .btn-round {
             background: rgba(255, 255, 255, 0.2); border: 2px solid white; color: white;
-            width: 60px; height: 60px; border-radius: 50%; margin: 0 10px; font-size: 14px;
+            width: 60px; height: 60px; border-radius: 50%; margin: 0 10px; font-size: 14px; cursor: pointer;
         }
         
-        /* 指引文字 */
-        #guide-text {
-            position: absolute; bottom: 100px; width: 100%; text-align: center;
-            font-size: 24px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold;
-        }
+        /* 載入狀態提示 */
+        #loading-status { font-size: 14px; color: #666; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
 <div id="container">
-    <video id="input_video" playsinline></video>
+    <video id="input_video" playsinline muted></video>
     <canvas id="output_canvas"></canvas>
     
     <div id="ui-layer">
         <div id="setup-panel">
-            <h2>跳高測驗設定</h2>
+            <h2>跳高測驗 V11</h2>
+            <div id="loading-status">正在下載 AI 模型...</div>
+            
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
             <select id="p_gender">
@@ -73,18 +81,18 @@
                 <option value="female">女</option>
             </select>
             <br>
-            <button onclick="startApp()">開始測驗</button>
-            <p style="font-size:12px; color:gray;">請將手機固定於腰部高度，距離約 3 公尺</p>
+            <button id="btn-start" onclick="startApp()" disabled>等待載入...</button>
+            <p style="font-size:12px; color:gray; margin-top:15px;">請將手機固定於腰部高度，距離約 3 公尺</p>
         </div>
 
         <div id="info-box" style="display:none;">
-            <div id="disp-name">姓名: --</div>
-            <div>目前: <span id="disp-curr" class="green big-text">0.0</span> cm</div>
-            <div>最高: <span id="disp-max" class="orange big-text">0.0</span> cm</div>
+            <div id="disp-name">--</div>
+            <div>目前: <span id="disp-curr" class="green big-text">0.0</span></div>
+            <div>最高: <span id="disp-max" class="orange big-text">0.0</span></div>
             <div id="disp-rating">評級: --</div>
         </div>
         
-        <div id="guide-text" style="display:none;">啟動中...</div>
+        <div id="guide-text" style="display:none;">準備中...</div>
 
         <div id="controls" style="display:none;">
             <button class="btn-round" onclick="resetTest()">重測<br>(R)</button>
@@ -98,6 +106,11 @@
     const videoElement = document.getElementById('input_video');
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
+    const statusText = document.getElementById('loading-status');
+    const btnStart = document.getElementById('btn-start');
+    
+    let pose = null;
+    let camera = null;
     
     let userHeight = 170;
     let userName = "";
@@ -108,58 +121,88 @@
     let pixelsPerCm = 0;
     let standingReachY = 0;
     let maxJumpCm = 0;
-    let currJumpCm = 0; // 平滑顯示用
+    let currJumpCm = 0;
 
-    // 穩定度緩衝
     let stabilityQueue = [];
     let reachQueue = [];
-    const FRAMES_TO_LOCK = 30; // Web版幀率較不穩，稍微降低一點
-    const STABILITY_THRES = 0.05; // 比例值 (相對於畫布高度)
+    const STABILITY_THRES = 0.05;
 
-    // --- MediaPipe 設定 ---
-    const pose = new Pose({locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-    }});
-    
-    pose.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-    
-    pose.onResults(onResults);
+    // --- 1. 系統檢查與載入 ---
+    window.onload = function() {
+        console.log("頁面載入完成，檢查 AI 模組...");
+        
+        // 檢查 MediaPipe 是否成功載入
+        if (typeof Pose === 'undefined' || typeof Camera === 'undefined') {
+            statusText.innerText = "❌ AI 載入失敗！請檢查網路連線";
+            statusText.style.color = "red";
+            alert("嚴重錯誤：無法載入 AI 模型。\n請確認您的網路可以存取 CDN，或嘗試切換 WiFi/行動網路。");
+            return;
+        }
 
-    // --- 啟動函式 ---
-    function startApp() {
+        statusText.innerText = "✅ AI 模組就緒";
+        statusText.style.color = "green";
+        btnStart.innerText = "開始測驗";
+        btnStart.disabled = false;
+        
+        // 初始化 Pose 模型 (但還不啟動相機)
+        try {
+            pose = new Pose({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
+            }});
+            
+            pose.setOptions({
+                modelComplexity: 1,
+                smoothLandmarks: true,
+                enableSegmentation: false,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            pose.onResults(onResults);
+            
+        } catch (e) {
+            console.error(e);
+            alert("模型初始化失敗: " + e.message);
+        }
+    };
+
+    // --- 2. 啟動測驗 ---
+    async function startApp() {
+        if (!pose) { alert("AI 尚未準備好"); return; }
+        
         userName = document.getElementById('p_name').value || "測試者";
         userHeight = parseFloat(document.getElementById('p_height').value);
         userGender = document.getElementById('p_gender').value;
         
-        if(!userHeight || userHeight < 50) { alert("請輸入正確身高"); return; }
-        
+        if(!userHeight || userHeight < 50) { alert("請輸入正確身高 (50-300cm)"); return; }
+
+        // UI 切換
         document.getElementById('setup-panel').style.display = 'none';
         document.getElementById('info-box').style.display = 'block';
         document.getElementById('controls').style.display = 'block';
         document.getElementById('guide-text').style.display = 'block';
-        document.getElementById('disp-name').innerText = `姓名: ${userName}`;
+        document.getElementById('disp-name').innerText = userName;
 
-        // 啟動相機
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await pose.send({image: videoElement});
-            },
-            width: 1280,
-            height: 720
-        });
-        camera.start();
-        state = 1; // 進入步驟1
+        try {
+            // 啟動相機
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await pose.send({image: videoElement});
+                },
+                width: 1280, // 嘗試請求高解析度
+                height: 720
+            });
+            await camera.start();
+            state = 1; // 進入步驟1
+            
+        } catch (e) {
+            alert("相機啟動失敗：\n請確認瀏覽器有權限使用相機。\n" + e.message);
+            location.reload(); // 失敗就重整
+        }
     }
 
-    // --- 核心迴圈 (每一幀) ---
+    // --- 3. 核心運算 ---
     function onResults(results) {
-        // 設定畫布大小
+        // 設定畫布與視窗同大
         canvasElement.width = window.innerWidth;
         canvasElement.height = window.innerHeight;
         const w = canvasElement.width;
@@ -168,36 +211,189 @@
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, w, h);
         
-        // 繪製骨架連線
-        if (results.poseLandmarks) {
-            // 只在步驟 1 (全身校正) 畫全身，避免測驗時太亂
-            if(state === 1) {
-                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
-                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#FF0000', lineWidth: 1});
+        // 確保有人
+        if (!results.poseLandmarks) {
+            document.getElementById('guide-text').innerText = "未偵測到全身...";
+            canvasCtx.restore();
+            return;
+        }
+
+        const lm = results.poseLandmarks;
+
+        // 畫骨架 (僅在校正期顯示)
+        if(state === 1 || state === 2) {
+            drawConnectors(canvasCtx, lm, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+            drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
+        }
+        
+        // 關鍵點計算 (0~1)
+        const heelY = (lm[29].y + lm[30].y) / 2;
+        const eyeY = (lm[2].y + lm[5].y) / 2;
+        
+        // 手指尖端
+        const leftIdxY = lm[19].y;
+        const rightIdxY = lm[20].y;
+        const handTopY = Math.min(leftIdxY, rightIdxY); // Y越小越高
+        
+        // 手的位置 (像素)
+        const activeHandIdx = leftIdxY < rightIdxY ? 19 : 20;
+        const handPxX = lm[activeHandIdx].x * w;
+        const handPxY = lm[activeHandIdx].y * h;
+
+        const guide = document.getElementById('guide-text');
+
+        // === 邏輯狀態機 ===
+        
+        // 【狀態 1: 身高校正】
+        if (state === 1) {
+            guide.innerText = "步驟1: 請自然站立 (校正身高)";
+            guide.style.color = "yellow";
+            
+            // 檢查腳跟和眼睛是否可見
+            if (lm[29].visibility > 0.5 && lm[2].visibility > 0.5) {
+                stabilityQueue.push(heelY);
+                
+                // 畫進度條
+                const progress = (stabilityQueue.length / 30) * w;
+                canvasCtx.fillStyle = "yellow";
+                canvasCtx.fillRect(0, h-20, progress, 20);
+                
+                if (stabilityQueue.length > 30) {
+                    stabilityQueue.shift();
+                    const maxH = Math.max(...stabilityQueue);
+                    const minH = Math.min(...stabilityQueue);
+                    
+                    if ((maxH - minH) < 0.02) { // 夠穩定
+                        const bodyPx = heelY - eyeY; 
+                        pixelsPerCm = bodyPx / (userHeight * 0.93);
+                        state = 2;
+                        stabilityQueue = [];
+                        reachQueue = [];
+                    }
+                }
+            } else {
+                guide.innerText = "請後退，確保全身入鏡";
+                guide.style.color = "red";
+                stabilityQueue = [];
+            }
+        }
+
+        // 【狀態 2: 摸高基準】
+        else if (state === 2) {
+            guide.innerText = "步驟2: 單手舉高並靜止";
+            guide.style.color = "cyan";
+            
+            // 畫眼睛基準線
+            const eyePy = eyeY * h;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, eyePy);
+            canvasCtx.lineTo(w, eyePy);
+            canvasCtx.strokeStyle = "red";
+            canvasCtx.lineWidth = 2;
+            canvasCtx.setLineDash([5, 5]);
+            canvasCtx.stroke();
+            canvasCtx.setLineDash([]);
+            
+            // 標示手的位置
+            canvasCtx.beginPath();
+            canvasCtx.arc(handPxX, handPxY, 15, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = "#00FF00";
+            canvasCtx.fill();
+
+            if (handTopY < eyeY) { // 手高於眼睛
+                reachQueue.push(handTopY);
+                if(reachQueue.length > 30) reachQueue.shift(); // Web版用30幀
+                
+                if (reachQueue.length === 30) {
+                    const maxR = Math.max(...reachQueue);
+                    const minR = Math.min(...reachQueue);
+                    
+                    if ((maxR - minR) < STABILITY_THRES) {
+                        standingReachY = reachQueue.reduce((a,b)=>a+b) / reachQueue.length;
+                        state = 3;
+                    }
+                }
+            } else {
+                reachQueue = [];
+                guide.innerText = "手請舉高過頭 (超過紅線)";
+            }
+        }
+
+        // 【狀態 3: 跳躍】
+        else if (state === 3) {
+            guide.innerText = "步驟3: 跳！";
+            guide.style.color = "#0f0";
+            
+            // 畫基準線 (紫色)
+            const basePy = standingReachY * h;
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, basePy);
+            canvasCtx.lineTo(w, basePy);
+            canvasCtx.strokeStyle = "magenta";
+            canvasCtx.lineWidth = 3;
+            canvasCtx.stroke();
+            
+            // 標示手
+            canvasCtx.beginPath();
+            canvasCtx.arc(handPxX, handPxY, 10, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = "#00FF00";
+            canvasCtx.fill();
+
+            // 計算高度
+            const diffUnit = standingReachY - handTopY;
+            let rawCm = 0;
+            if (diffUnit > 0) {
+                rawCm = diffUnit / pixelsPerCm;
             }
             
-            // 取得關鍵點 (Y軸向下為正，0~1)
-            const lm = results.poseLandmarks;
-            const heelY = (lm[29].y + lm[30].y) / 2;
-            const eyeY = (lm[2].y + lm[5].y) / 2;
-            
-            // 手指尖端 (取最高點 = Y值最小)
-            const leftIdxY = lm[19].y;
-            const rightIdxY = lm[20].y;
-            const handTopY = Math.min(leftIdxY, rightIdxY);
-            
-            // 活躍手的位置 (用於畫圈)
-            const activeHandIdx = leftIdxY < rightIdxY ? 19 : 20;
-            const handX = lm[activeHandIdx].x * w;
-            const handY = lm[activeHandIdx].y * h;
+            // 顯示邏輯
+            currJumpCm = (rawCm * 0.4) + (currJumpCm * 0.6);
+            if (rawCm > maxJumpCm) {
+                maxJumpCm = rawCm;
+                updateRating();
+            }
 
-            // --- 狀態機邏輯 ---
-            const guide = document.getElementById('guide-text');
+            document.getElementById('disp-curr').innerText = currJumpCm.toFixed(1);
+            document.getElementById('disp-max').innerText = maxJumpCm.toFixed(1);
+        }
+        
+        canvasCtx.restore();
+    }
+    
+    // --- 輔助功能 ---
+    function updateRating() {
+        const ratingBox = document.getElementById('disp-rating');
+        let r = "D (加油)";
+        let color = "gray";
+        const h = maxJumpCm;
+        const isMale = (userGender === 'male');
 
-            // 【步驟 1: 身高校正】
-            if (state === 1) {
-                guide.innerText = "步驟1: 請自然站立 (校正身高)";
-                guide.style.color = "yellow";
-                
-                // 檢查全身入鏡 (腳跟與眼睛都在畫面內)
-                if (lm[29].visibility > 0.5 &&
+        if (isMale) {
+            if (h >= 70) { r = "S (職業級)"; color = "red"; }
+            else if (h >= 60) { r = "A (優秀)"; color = "orange"; }
+            else if (h >= 50) { r = "B (良好)"; color = "#0f0"; }
+            else if (h >= 40) { r = "C (平均)"; color = "yellow"; }
+        } else {
+            if (h >= 60) { r = "S (職業級)"; color = "red"; }
+            else if (h >= 50) { r = "A (優秀)"; color = "orange"; }
+            else if (h >= 40) { r = "B (良好)"; color = "#0f0"; }
+            else if (h >= 30) { r = "C (平均)"; color = "yellow"; }
+        }
+        ratingBox.innerText = `評級: ${r}`;
+        ratingBox.style.color = color;
+    }
+
+    function resetTest() {
+        state = 0;
+        maxJumpCm = 0;
+        currJumpCm = 0;
+        stabilityQueue = [];
+        reachQueue = [];
+        document.getElementById('disp-curr').innerText = "0.0";
+        document.getElementById('disp-max').innerText = "0.0";
+        state = 1; 
+    }
+</script>
+
+</body>
+</html>
