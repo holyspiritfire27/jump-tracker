@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (V13 精準穩定版)</title>
+    <title>AI 垂直跳高測驗 (V14 物理精準版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -31,7 +31,7 @@
             padding: 10px 15px; border-radius: 8px; text-align: right; pointer-events: none; font-size: 14px;
         }
         .big-text { font-size: 22px; font-weight: bold; }
-        .green { color: #0f0; } .orange { color: orange; } .red { color: #ff4444; } .cyan { color: cyan;}
+        .green { color: #0f0; } .orange { color: orange; } .cyan { color: cyan;}
         #guide-text {
             position: absolute; bottom: 120px; width: 100%; text-align: center;
             font-size: 22px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold; pointer-events: none;
@@ -53,7 +53,7 @@
     
     <div id="ui-layer">
         <div id="setup-panel">
-            <h2>跳高測驗 V13 (精準穩定版)</h2>
+            <h2>跳高測驗 V14 (物理精準版)</h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
@@ -66,7 +66,6 @@
         </div>
 
         <div id="info-box" style="display:none;">
-            <div id="tilt-warning" class="red" style="display:none; font-weight:bold; margin-bottom:5px;">⚠️ 手機傾斜 <span id="tilt-deg">0</span>° (已校正)</div>
             <div id="disp-name" style="font-size:18px; margin-bottom:5px;">--</div>
             <div>站立摸高: <span id="disp-stand-reach" class="cyan">0.0</span> cm</div>
             <hr style="border-color: #555; margin: 5px 0;">
@@ -104,7 +103,6 @@
     let pose = null, camera = null;
     let userHeight = 170, userName = "", userGender = "male";
     
-    // 測量狀態變數
     let state = 0; 
     let pixelsPerCm = 0;
     let baseHeelY = 0; 
@@ -114,10 +112,12 @@
     let maxReachCm = 0; 
     let jumpGradeStr = "--";
 
+    // 物理偵測最高點變數
+    let lastHeelY = null;
+    let lastVelocity = 0;
+
     let stabilityQueue = [];
     let reachQueue = [];
-    
-    // 平滑處理用的 Queue
     let heelQueue = [];
     let handQueue = [];
     const STABILITY_THRES = 0.05;
@@ -139,7 +139,6 @@
         pose.onResults(onResults);
     };
 
-    // 平滑處理函數 (移動平均)
     function smooth(value, queue, size = 5){
         queue.push(value);
         if(queue.length > size) queue.shift();
@@ -161,7 +160,7 @@
 
         camera = new Camera(videoElement, {
             onFrame: async () => { await pose.send({image: videoElement}); },
-            width: 1920, height: 1080 // 提升解析度增加精度
+            width: 1920, height: 1080 
         });
         await camera.start();
         state = 1; 
@@ -187,35 +186,15 @@
             drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
         }
         
-        // 核心修正 2 & 4: 取最低腳並進行平滑處理 (Y軸朝下，越大越低)
+        // 永遠取最低的腳
         const rawHeelY = Math.max(lm[29].y, lm[30].y);
         const heelY = smooth(rawHeelY, heelQueue, 5);
 
-        // 取最高手並進行平滑處理 (Y軸朝下，越小越高)
         const leftIdxY = lm[19].y, rightIdxY = lm[20].y;
         const rawHandTopY = Math.min(leftIdxY, rightIdxY); 
         const handTopY = smooth(rawHandTopY, handQueue, 5);
 
-        // 核心修正 1: 用頭頂/鼻子計算身高校正
-        const headY = lm[0].y; 
-        
-        // 傾斜計算
-        const midHipX = (lm[23].x + lm[24].x) / 2;
-        const midHipY = (lm[23].y + lm[24].y) / 2;
-        const dx = midHipX - lm[0].x;
-        const dy = midHipY - lm[0].y;
-        const tiltRads = Math.atan2(Math.abs(dx), Math.abs(dy));
-        const tiltDeg = tiltRads * (180 / Math.PI);
-        const cosTheta = Math.cos(tiltRads); 
-
-        const tiltWarnBox = document.getElementById('tilt-warning');
-        if (tiltDeg > 5) {
-            tiltWarnBox.style.display = 'block';
-            document.getElementById('tilt-deg').innerText = tiltDeg.toFixed(1);
-        } else {
-            tiltWarnBox.style.display = 'none';
-        }
-
+        const headY = lm[0].y; // 鼻子作為最高點參考
         const guide = document.getElementById('guide-text');
 
         // 狀態 1: 身高校正
@@ -229,7 +208,6 @@
                 if (stabilityQueue.length > 30) {
                     stabilityQueue.shift();
                     if ((Math.max(...stabilityQueue) - Math.min(...stabilityQueue)) < 0.02) {
-                        // 修正 1: 棄用 0.93，直接使用腳到頭(鼻子)的距離
                         const bodyPx = heelY - headY; 
                         pixelsPerCm = bodyPx / userHeight;
                         baseHeelY = heelY; 
@@ -243,7 +221,8 @@
         else if (state === 2) {
             guide.innerText = "步驟2: 單手舉高並靜止"; guide.style.color = "cyan";
             
-            let currReachCm = ((baseHeelY - handTopY) / (pixelsPerCm * cosTheta));
+            // ✅ 移除了 cosTheta 變數
+            let currReachCm = (baseHeelY - handTopY) / pixelsPerCm;
             if(currReachCm > 0) document.getElementById('disp-stand-reach').innerText = currReachCm.toFixed(1);
 
             if (handTopY < headY) {
@@ -256,34 +235,39 @@
                 }
             } else { reachQueue = []; guide.innerText = "手請舉高過頭"; }
         }
-        // 狀態 3: 跳躍
+        // 狀態 3: 跳躍測量
         else if (state === 3) {
             guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
             
+            // ✅ 移除了 cosTheta 變數
             let footJumpCm = 0;
-            if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / (pixelsPerCm * cosTheta);
-            
-            let currentReachCm = (baseHeelY - handTopY) / (pixelsPerCm * cosTheta);
+            if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / pixelsPerCm;
+            let currentReachCm = (baseHeelY - handTopY) / pixelsPerCm;
 
-            // 核心修正 3: 加入跳躍偵測門檻 (>2cm)，避免原地抖動更新數據
             if (footJumpCm > 2) {
                 let isNewMax = false;
-                // 更新最高腳離地
-                if (footJumpCm > maxFootCm) {
-                    maxFootCm = footJumpCm;
-                    isNewMax = true;
-                }
-                // 更新最高摸高
-                if (currentReachCm > maxReachCm) {
-                    maxReachCm = currentReachCm;
-                    isNewMax = true;
+                if (footJumpCm > maxFootCm) { maxFootCm = footJumpCm; isNewMax = true; }
+                if (currentReachCm > maxReachCm) { maxReachCm = currentReachCm; isNewMax = true; }
+
+                if (isNewMax) { updateRating(); }
+
+                // 🔥 物理速度計算 (Velocity)
+                let velocity = 0;
+                if (lastHeelY !== null) {
+                    velocity = heelY - lastHeelY; // Y軸向下為正。負值=上升中，正值=下墜中
                 }
 
-                if (isNewMax) {
-                    updateRating();
-                    captureSnapshotImage(); // 紀錄最高點影像
+                // 當速度由負（上升）轉正（下墜），且高度接近最高點時，觸發快門！
+                // 這樣拍出來的一定是完美的滯空瞬間
+                if (velocity > 0 && lastVelocity <= 0 && footJumpCm >= maxFootCm * 0.9) {
+                    captureSnapshotImage();
                 }
+
+                lastVelocity = velocity;
+            } else {
+                lastVelocity = 0; // 在地面時歸零
             }
+            lastHeelY = heelY; // 記錄上一幀的腳跟高度
 
             document.getElementById('disp-max-foot').innerText = maxFootCm.toFixed(1);
             document.getElementById('disp-max-reach').innerText = maxReachCm.toFixed(1);
@@ -344,7 +328,6 @@
         document.getElementById('snapshot-panel').style.display = 'block';
     }
 
-    // 核心修正 6: Blob 下載解法，繞過 FB/IG 阻擋
     function downloadSnapshot() {
         if (!capturedImageURL) return;
 
@@ -370,6 +353,7 @@
         state = 0; maxFootCm = 0; maxReachCm = 0; standingReachCm = 0;
         stabilityQueue = []; reachQueue = []; 
         heelQueue = []; handQueue = []; 
+        lastHeelY = null; lastVelocity = 0;
         capturedImageURL = null;
         document.getElementById('disp-stand-reach').innerText = "0.0";
         document.getElementById('disp-max-foot').innerText = "0.0";
