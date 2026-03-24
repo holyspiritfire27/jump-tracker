@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (V12 專業版)</title>
+    <title>AI 垂直跳高測驗 (V13 精準穩定版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -12,41 +12,32 @@
     
     <style>
         body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
-        
         #container { position: relative; width: 100vw; height: 100vh; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-        canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); pointer-events: none;}
-        
+        video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        canvas.overlay { pointer-events: none; }
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-        
         #setup-panel {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(255, 255, 255, 0.95); padding: 25px; border-radius: 15px;
             text-align: center; pointer-events: auto; width: 85%; max-width: 350px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        
         input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 90%; border: 1px solid #ccc; border-radius: 5px; }
         button { background: #007bff; color: white; border: none; padding: 12px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; pointer-events: auto; }
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; }
-
         #info-box {
             position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: white;
             padding: 10px 15px; border-radius: 8px; text-align: right; pointer-events: none; font-size: 14px;
         }
         .big-text { font-size: 22px; font-weight: bold; }
         .green { color: #0f0; } .orange { color: orange; } .red { color: #ff4444; } .cyan { color: cyan;}
-
         #guide-text {
             position: absolute; bottom: 120px; width: 100%; text-align: center;
             font-size: 22px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold; pointer-events: none;
         }
-        
         #controls { position: absolute; bottom: 20px; width: 100%; text-align: center; pointer-events: auto; }
         .btn-round { background: rgba(0, 0, 0, 0.6); border: 2px solid white; color: white; width: 65px; height: 65px; border-radius: 50%; margin: 0 5px; font-size: 13px; cursor: pointer; pointer-events: auto; }
-        
-        /* 快照展示區 */
         #snapshot-panel {
             display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.9); padding: 15px; border-radius: 10px; text-align: center; z-index: 100; pointer-events: auto; width: 80%; max-width: 400px;
@@ -62,7 +53,7 @@
     
     <div id="ui-layer">
         <div id="setup-panel">
-            <h2>跳高測驗 V12 (專業版)</h2>
+            <h2>跳高測驗 V13 (精準穩定版)</h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
@@ -116,17 +107,21 @@
     // 測量狀態變數
     let state = 0; 
     let pixelsPerCm = 0;
-    let baseHeelY = 0; // 地面基準線
+    let baseHeelY = 0; 
     
     let standingReachCm = 0; 
-    let maxFootCm = 0;  // 腳離地最高
-    let maxReachCm = 0; // 摸高最高
+    let maxFootCm = 0;  
+    let maxReachCm = 0; 
     let jumpGradeStr = "--";
 
     let stabilityQueue = [];
     let reachQueue = [];
+    
+    // 平滑處理用的 Queue
+    let heelQueue = [];
+    let handQueue = [];
     const STABILITY_THRES = 0.05;
-    let capturedImageURL = null; // 儲存快照
+    let capturedImageURL = null; 
 
     window.onload = function() {
         if (typeof Pose === 'undefined' || typeof Camera === 'undefined') {
@@ -144,6 +139,13 @@
         pose.onResults(onResults);
     };
 
+    // 平滑處理函數 (移動平均)
+    function smooth(value, queue, size = 5){
+        queue.push(value);
+        if(queue.length > size) queue.shift();
+        return queue.reduce((a, b) => a + b, 0) / queue.length;
+    }
+
     async function startApp() {
         userName = document.getElementById('p_name').value || "測試者";
         userHeight = parseFloat(document.getElementById('p_height').value);
@@ -159,7 +161,7 @@
 
         camera = new Camera(videoElement, {
             onFrame: async () => { await pose.send({image: videoElement}); },
-            width: 1280, height: 720
+            width: 1920, height: 1080 // 提升解析度增加精度
         });
         await camera.start();
         state = 1; 
@@ -185,21 +187,27 @@
             drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
         }
         
-        const heelY = (lm[29].y + lm[30].y) / 2;
-        const eyeY = (lm[2].y + lm[5].y) / 2;
+        // 核心修正 2 & 4: 取最低腳並進行平滑處理 (Y軸朝下，越大越低)
+        const rawHeelY = Math.max(lm[29].y, lm[30].y);
+        const heelY = smooth(rawHeelY, heelQueue, 5);
+
+        // 取最高手並進行平滑處理 (Y軸朝下，越小越高)
         const leftIdxY = lm[19].y, rightIdxY = lm[20].y;
-        const handTopY = Math.min(leftIdxY, rightIdxY); 
+        const rawHandTopY = Math.min(leftIdxY, rightIdxY); 
+        const handTopY = smooth(rawHandTopY, handQueue, 5);
+
+        // 核心修正 1: 用頭頂/鼻子計算身高校正
+        const headY = lm[0].y; 
         
-        // 【新增】傾斜計算 (鼻子與雙髖中點)
+        // 傾斜計算
         const midHipX = (lm[23].x + lm[24].x) / 2;
         const midHipY = (lm[23].y + lm[24].y) / 2;
         const dx = midHipX - lm[0].x;
         const dy = midHipY - lm[0].y;
         const tiltRads = Math.atan2(Math.abs(dx), Math.abs(dy));
         const tiltDeg = tiltRads * (180 / Math.PI);
-        const cosTheta = Math.cos(tiltRads); // 用於校正誤差
+        const cosTheta = Math.cos(tiltRads); 
 
-        // 處理傾斜警告 UI
         const tiltWarnBox = document.getElementById('tilt-warning');
         if (tiltDeg > 5) {
             tiltWarnBox.style.display = 'block';
@@ -213,7 +221,7 @@
         // 狀態 1: 身高校正
         if (state === 1) {
             guide.innerText = "步驟1: 請自然站立 (校正身高)"; guide.style.color = "yellow";
-            if (lm[29].visibility > 0.5 && lm[2].visibility > 0.5) {
+            if (lm[29].visibility > 0.5 && lm[0].visibility > 0.5) {
                 stabilityQueue.push(heelY);
                 canvasCtx.fillStyle = "yellow";
                 canvasCtx.fillRect(0, h-20, (stabilityQueue.length/30)*w, 20);
@@ -221,9 +229,10 @@
                 if (stabilityQueue.length > 30) {
                     stabilityQueue.shift();
                     if ((Math.max(...stabilityQueue) - Math.min(...stabilityQueue)) < 0.02) {
-                        const bodyPx = heelY - eyeY; 
-                        pixelsPerCm = bodyPx / (userHeight * 0.93);
-                        baseHeelY = heelY; // 記錄地面基準
+                        // 修正 1: 棄用 0.93，直接使用腳到頭(鼻子)的距離
+                        const bodyPx = heelY - headY; 
+                        pixelsPerCm = bodyPx / userHeight;
+                        baseHeelY = heelY; 
                         state = 2;
                         stabilityQueue = []; reachQueue = [];
                     }
@@ -234,11 +243,10 @@
         else if (state === 2) {
             guide.innerText = "步驟2: 單手舉高並靜止"; guide.style.color = "cyan";
             
-            // 即時顯示目前舉手離地高度 (經傾斜校正)
             let currReachCm = ((baseHeelY - handTopY) / (pixelsPerCm * cosTheta));
             if(currReachCm > 0) document.getElementById('disp-stand-reach').innerText = currReachCm.toFixed(1);
 
-            if (handTopY < eyeY) {
+            if (handTopY < headY) {
                 reachQueue.push(handTopY);
                 if(reachQueue.length > 30) reachQueue.shift();
                 if (reachQueue.length === 30 && (Math.max(...reachQueue) - Math.min(...reachQueue)) < STABILITY_THRES) {
@@ -252,21 +260,29 @@
         else if (state === 3) {
             guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
             
-            // 計算腳離地高度 (傾斜校正)
             let footJumpCm = 0;
             if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / (pixelsPerCm * cosTheta);
             
-            // 計算最高摸高 (傾斜校正)
             let currentReachCm = (baseHeelY - handTopY) / (pixelsPerCm * cosTheta);
 
-            let isNewMax = false;
-            
-            if (footJumpCm > maxFootCm) { maxFootCm = footJumpCm; isNewMax = true; }
-            if (currentReachCm > maxReachCm) { maxReachCm = currentReachCm; isNewMax = true; }
+            // 核心修正 3: 加入跳躍偵測門檻 (>2cm)，避免原地抖動更新數據
+            if (footJumpCm > 2) {
+                let isNewMax = false;
+                // 更新最高腳離地
+                if (footJumpCm > maxFootCm) {
+                    maxFootCm = footJumpCm;
+                    isNewMax = true;
+                }
+                // 更新最高摸高
+                if (currentReachCm > maxReachCm) {
+                    maxReachCm = currentReachCm;
+                    isNewMax = true;
+                }
 
-            if (isNewMax) {
-                updateRating();
-                captureSnapshotImage(); // 紀錄最高點影像
+                if (isNewMax) {
+                    updateRating();
+                    captureSnapshotImage(); // 紀錄最高點影像
+                }
             }
 
             document.getElementById('disp-max-foot').innerText = maxFootCm.toFixed(1);
@@ -278,7 +294,7 @@
     // --- 評級與快照功能 ---
     function updateRating() {
         let r = "D (加油)", color = "gray";
-        const h = maxFootCm; // 使用腳離地高度來評級
+        const h = maxFootCm; 
         if (userGender === 'male') {
             if (h >= 70) { r = "S (職業級)"; color = "red"; }
             else if (h >= 60) { r = "A (優秀)"; color = "orange"; }
@@ -301,14 +317,12 @@
         capCanvas.width = videoElement.videoWidth;
         capCanvas.height = videoElement.videoHeight;
         
-        // 繪製影片並做鏡像翻轉
         ctx.save();
         ctx.translate(capCanvas.width, 0);
         ctx.scale(-1, 1);
         ctx.drawImage(videoElement, 0, 0, capCanvas.width, capCanvas.height);
         ctx.restore();
 
-        // 繪製成績浮水印區塊
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
         ctx.fillRect(20, 20, 360, 180);
         
@@ -330,17 +344,33 @@
         document.getElementById('snapshot-panel').style.display = 'block';
     }
 
+    // 核心修正 6: Blob 下載解法，繞過 FB/IG 阻擋
     function downloadSnapshot() {
         if (!capturedImageURL) return;
-        const link = document.createElement('a');
-        link.download = `${userName}_跳高成績.jpg`;
-        link.href = capturedImageURL;
-        link.click();
+
+        fetch(capturedImageURL)
+            .then(res => res.blob())
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${userName}_跳高成績.jpg`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => {
+                alert("下載失敗，請嘗試用 Chrome 或 Safari 瀏覽器開啟！");
+                console.error(err);
+            });
     }
 
     function resetTest() {
         state = 0; maxFootCm = 0; maxReachCm = 0; standingReachCm = 0;
-        stabilityQueue = []; reachQueue = []; capturedImageURL = null;
+        stabilityQueue = []; reachQueue = []; 
+        heelQueue = []; handQueue = []; 
+        capturedImageURL = null;
         document.getElementById('disp-stand-reach').innerText = "0.0";
         document.getElementById('disp-max-foot').innerText = "0.0";
         document.getElementById('disp-max-reach').innerText = "0.0";
