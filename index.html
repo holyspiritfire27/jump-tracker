@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (V14 物理精準版)</title>
+    <title>AI 垂直跳高測驗 (V15 雙鏡頭防出框版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -13,7 +13,8 @@
     <style>
         body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
         #container { position: relative; width: 100vw; height: 100vh; }
-        video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        /* 預設的鏡像翻轉將由 JS 動態控制，這裡先移除預設的 scaleX(-1) */
+        video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; }
         canvas.overlay { pointer-events: none; }
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         #setup-panel {
@@ -22,7 +23,7 @@
             text-align: center; pointer-events: auto; width: 85%; max-width: 350px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 90%; border: 1px solid #ccc; border-radius: 5px; }
+        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 90%; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
         button { background: #007bff; color: white; border: none; padding: 12px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; pointer-events: auto; }
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; }
@@ -43,6 +44,13 @@
             background: rgba(0,0,0,0.9); padding: 15px; border-radius: 10px; text-align: center; z-index: 100; pointer-events: auto; width: 80%; max-width: 400px;
         }
         #snapshot-img { width: 100%; border: 2px solid #0f0; border-radius: 8px; margin-bottom: 10px; }
+        
+        /* 頂部警告橫幅 */
+        #bound-warning {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 0, 0, 0.8); color: white; padding: 8px 15px;
+            border-radius: 8px; font-weight: bold; font-size: 16px; display: none; z-index: 20;
+        }
     </style>
 </head>
 <body>
@@ -52,14 +60,20 @@
     <canvas id="output_canvas" class="overlay"></canvas>
     
     <div id="ui-layer">
+        <div id="bound-warning">⚠️ 警告：出框邊緣</div>
+
         <div id="setup-panel">
-            <h2>跳高測驗 V14 (物理精準版)</h2>
+            <h2>跳高測驗 V15<br><span style="font-size: 14px; color: #555;">(雙鏡頭防出框版)</span></h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
             <select id="p_gender">
                 <option value="male">男</option>
                 <option value="female">女</option>
+            </select>
+            <select id="camera_select">
+                <option value="user">前置鏡頭 (自拍)</option>
+                <option value="environment">後置鏡頭 (幫人測量)</option>
             </select>
             <br>
             <button id="btn-start" onclick="startApp()" disabled>等待載入...</button>
@@ -100,8 +114,8 @@
     const statusText = document.getElementById('loading-status');
     const btnStart = document.getElementById('btn-start');
     
-    let pose = null, camera = null;
-    let userHeight = 170, userName = "", userGender = "male";
+    let pose = null, camera = null, stream = null;
+    let userHeight = 170, userName = "", userGender = "male", facingMode = "user";
     
     let state = 0; 
     let pixelsPerCm = 0;
@@ -112,7 +126,6 @@
     let maxReachCm = 0; 
     let jumpGradeStr = "--";
 
-    // 物理偵測最高點變數
     let lastHeelY = null;
     let lastVelocity = 0;
 
@@ -149,6 +162,7 @@
         userName = document.getElementById('p_name').value || "測試者";
         userHeight = parseFloat(document.getElementById('p_height').value);
         userGender = document.getElementById('p_gender').value;
+        facingMode = document.getElementById('camera_select').value;
         
         if(!userHeight || userHeight < 50) { alert("請輸入正確身高"); return; }
 
@@ -158,12 +172,36 @@
         document.getElementById('guide-text').style.display = 'block';
         document.getElementById('disp-name').innerText = userName;
 
-        camera = new Camera(videoElement, {
-            onFrame: async () => { await pose.send({image: videoElement}); },
-            width: 1920, height: 1080 
-        });
-        await camera.start();
-        state = 1; 
+        // ✅ 動態鏡像翻轉處理 (前鏡頭翻轉，後鏡頭不翻轉)
+        if (facingMode === "user") {
+            videoElement.style.transform = "scaleX(-1)";
+            canvasElement.style.transform = "scaleX(-1)";
+        } else {
+            videoElement.style.transform = "scaleX(1)";
+            canvasElement.style.transform = "scaleX(1)";
+        }
+
+        try {
+            // ✅ 手動獲取影像流，強制高畫質與鏡頭選擇
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: facingMode,
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
+            });
+            videoElement.srcObject = stream;
+            
+            camera = new Camera(videoElement, {
+                onFrame: async () => { await pose.send({image: videoElement}); },
+                width: 1920, height: 1080 
+            });
+            await camera.start();
+            state = 1; 
+        } catch (err) {
+            alert("相機開啟失敗，請確認已給予權限！");
+            console.error(err);
+        }
     }
 
     function onResults(results) {
@@ -186,7 +224,7 @@
             drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
         }
         
-        // 永遠取最低的腳
+        // 取得平滑化後的地板座標與手部座標 (數值為 0.0 ~ 1.0 的相對比例)
         const rawHeelY = Math.max(lm[29].y, lm[30].y);
         const heelY = smooth(rawHeelY, heelQueue, 5);
 
@@ -196,11 +234,45 @@
 
         const headY = lm[0].y; // 鼻子作為最高點參考
         const guide = document.getElementById('guide-text');
+        const boundWarning = document.getElementById('bound-warning');
 
-        // 狀態 1: 身高校正
+        // ✅ 防出框檢查 (狀態 2 與 3 適用)
+        if (state === 2 || state === 3) {
+            if (handTopY < 0.03) {
+                boundWarning.innerText = "⚠️ 手太靠近畫面上緣，測量可能失效！";
+                boundWarning.style.display = "block";
+            } else if (rawHeelY > 0.97) {
+                boundWarning.innerText = "⚠️ 腳太靠近畫面底緣，請退後！";
+                boundWarning.style.display = "block";
+            } else {
+                boundWarning.style.display = "none";
+            }
+        } else {
+            boundWarning.style.display = "none";
+        }
+
+        // 狀態 1: 身高校正與安全距離檢測
         if (state === 1) {
-            guide.innerText = "步驟1: 請自然站立 (校正身高)"; guide.style.color = "yellow";
+            guide.innerText = "步驟1: 請自然站立 (校正身高)"; 
+            guide.style.color = "yellow";
+            
             if (lm[29].visibility > 0.5 && lm[0].visibility > 0.5) {
+                
+                // 🔥 核心修正：利用身高比例，嚴格計算 125cm 安全頭頂空間
+                const bodyPx = heelY - headY; // 畫面中人體的比例長度
+                const pxPerCm_est = bodyPx / userHeight; // 估算 1cm 佔據的畫面比例
+                const safeMarginRatio = pxPerCm_est * 125; // 125cm 所需要的畫面頂部預留比例
+
+                // 如果頭頂距離畫面邊緣的距離 < 安全預留空間
+                if (headY < safeMarginRatio) {
+                    guide.innerText = "⚠️ 請後退！頭頂需預留 125cm 空間（避免跳出畫面）";
+                    guide.style.color = "red";
+                    stabilityQueue = []; // 中斷穩定判定，逼迫使用者退後
+                    canvasCtx.restore();
+                    return; 
+                }
+
+                // 若安全距離通過，進入穩定讀取階段
                 stabilityQueue.push(heelY);
                 canvasCtx.fillStyle = "yellow";
                 canvasCtx.fillRect(0, h-20, (stabilityQueue.length/30)*w, 20);
@@ -208,7 +280,6 @@
                 if (stabilityQueue.length > 30) {
                     stabilityQueue.shift();
                     if ((Math.max(...stabilityQueue) - Math.min(...stabilityQueue)) < 0.02) {
-                        const bodyPx = heelY - headY; 
                         pixelsPerCm = bodyPx / userHeight;
                         baseHeelY = heelY; 
                         state = 2;
@@ -221,7 +292,6 @@
         else if (state === 2) {
             guide.innerText = "步驟2: 單手舉高並靜止"; guide.style.color = "cyan";
             
-            // ✅ 移除了 cosTheta 變數
             let currReachCm = (baseHeelY - handTopY) / pixelsPerCm;
             if(currReachCm > 0) document.getElementById('disp-stand-reach').innerText = currReachCm.toFixed(1);
 
@@ -239,7 +309,6 @@
         else if (state === 3) {
             guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
             
-            // ✅ 移除了 cosTheta 變數
             let footJumpCm = 0;
             if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / pixelsPerCm;
             let currentReachCm = (baseHeelY - handTopY) / pixelsPerCm;
@@ -251,23 +320,20 @@
 
                 if (isNewMax) { updateRating(); }
 
-                // 🔥 物理速度計算 (Velocity)
                 let velocity = 0;
                 if (lastHeelY !== null) {
-                    velocity = heelY - lastHeelY; // Y軸向下為正。負值=上升中，正值=下墜中
+                    velocity = heelY - lastHeelY; 
                 }
 
-                // 當速度由負（上升）轉正（下墜），且高度接近最高點時，觸發快門！
-                // 這樣拍出來的一定是完美的滯空瞬間
                 if (velocity > 0 && lastVelocity <= 0 && footJumpCm >= maxFootCm * 0.9) {
                     captureSnapshotImage();
                 }
 
                 lastVelocity = velocity;
             } else {
-                lastVelocity = 0; // 在地面時歸零
+                lastVelocity = 0; 
             }
-            lastHeelY = heelY; // 記錄上一幀的腳跟高度
+            lastHeelY = heelY; 
 
             document.getElementById('disp-max-foot').innerText = maxFootCm.toFixed(1);
             document.getElementById('disp-max-reach').innerText = maxReachCm.toFixed(1);
@@ -302,8 +368,11 @@
         capCanvas.height = videoElement.videoHeight;
         
         ctx.save();
-        ctx.translate(capCanvas.width, 0);
-        ctx.scale(-1, 1);
+        // ✅ 若為前鏡頭，快照需要翻轉回來；後鏡頭則維持正常原樣
+        if (facingMode === "user") {
+            ctx.translate(capCanvas.width, 0);
+            ctx.scale(-1, 1);
+        }
         ctx.drawImage(videoElement, 0, 0, capCanvas.width, capCanvas.height);
         ctx.restore();
 
@@ -355,6 +424,7 @@
         heelQueue = []; handQueue = []; 
         lastHeelY = null; lastVelocity = 0;
         capturedImageURL = null;
+        document.getElementById('bound-warning').style.display = "none";
         document.getElementById('disp-stand-reach').innerText = "0.0";
         document.getElementById('disp-max-foot').innerText = "0.0";
         document.getElementById('disp-max-reach').innerText = "0.0";
