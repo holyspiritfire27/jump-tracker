@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title> 垂直跳高測驗 (V18)</title>
+    <title>垂直跳高測驗 (V19 運動科學重心版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -17,7 +17,6 @@
         canvas.overlay { pointer-events: none; }
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
-        /* 🔥 V18 更新：半透明毛玻璃面板，方便看穿背景預覽 */
         #setup-panel {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(5px);
@@ -39,7 +38,7 @@
             padding: 10px 15px; border-radius: 8px; text-align: right; pointer-events: none; font-size: 14px;
         }
         .big-text { font-size: 22px; font-weight: bold; }
-        .green { color: #0f0; } .orange { color: orange; } .cyan { color: cyan;}
+        .green { color: #0f0; } .orange { color: orange; } .cyan { color: cyan;} .yellow { color: yellow; }
         #guide-text {
             position: absolute; bottom: 120px; width: 100%; text-align: center;
             font-size: 22px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold; pointer-events: none;
@@ -69,7 +68,7 @@
         <div id="bound-warning">⚠️ 警告：出框邊緣</div>
 
         <div id="setup-panel">
-            <h2>跳高測驗 V18<br><span style="font-size: 14px; color: #555;">(即時預覽鏡頭版)</span></h2>
+            <h2>跳高測驗 V19<br><span style="font-size: 14px; color: #555;">(運動科學重心版)</span></h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             
             <input type="text" id="p_name" placeholder="受測者姓名">
@@ -89,6 +88,7 @@
             <div id="disp-name" style="font-size:18px; margin-bottom:5px;">--</div>
             <div>站立摸高: <span id="disp-stand-reach" class="cyan">0.0</span> cm</div>
             <hr style="border-color: #555; margin: 5px 0;">
+            <div>重心淨高: <span id="disp-com-jump" class="yellow big-text">0.0</span></div>
             <div>腳離地高: <span id="disp-max-foot" class="orange big-text">0.0</span></div>
             <div>最高摸高: <span id="disp-max-reach" class="green big-text">0.0</span></div>
             <div id="disp-rating" style="margin-top:5px;">評級: --</div>
@@ -126,20 +126,27 @@
     
     let state = 0; 
     let pixelsPerCm = 0;
-    let baseHeelY = 0; 
     
+    // 基準線
+    let baseHeelY = 0; 
+    let baseComY = 0; // ✅ 新增：重心基準線
+    
+    // 最高數據
     let standingReachCm = 0; 
     let maxFootCm = 0;  
     let maxReachCm = 0; 
+    let maxComJumpCm = 0; // ✅ 新增：最高重心位移
     let jumpGradeStr = "--";
 
-    let lastHeelY = null;
+    // 物理偵測 (改用重心來算速度，更準確！)
+    let lastComY = null;
     let lastVelocity = 0;
 
     let stabilityQueue = [];
     let reachQueue = [];
     let heelQueue = [];
     let handQueue = [];
+    let comQueue = []; // ✅ 重心平滑 Queue
     const STABILITY_THRES = 0.05;
     let capturedImageURL = null; 
 
@@ -170,15 +177,11 @@
         }
     }
 
-    // 🔥 V18 核心：開啟預覽並取得實體鏡頭清單
     async function startPreview() {
         try {
-            // 先取得一次基礎鏡頭權限，確保瀏覽器解鎖硬體名稱
             currentStream = await navigator.mediaDevices.getUserMedia({video: true});
-            
             const devices = await navigator.mediaDevices.enumerateDevices();
             const videoDevices = devices.filter(d => d.kind === 'videoinput');
-            
             const select = document.getElementById('camera_select');
             select.innerHTML = ''; 
             
@@ -189,17 +192,14 @@
                 select.appendChild(opt);
             });
             
-            // 當使用者切換選單時，觸發即時切換鏡頭
             select.onchange = (e) => {
                 const selectedText = select.options[select.selectedIndex].text;
                 switchCamera(e.target.value, selectedText);
             };
             
-            // 介面切換
             document.getElementById('btn-preview').style.display = 'none';
             select.style.display = 'block';
             
-            // 預設切換到清單中的第一個鏡頭開始預覽
             if(videoDevices.length > 0) {
                 switchCamera(videoDevices[0].deviceId, videoDevices[0].label);
             }
@@ -212,13 +212,11 @@
         }
     }
 
-    // 🔥 V18 核心：即時切換鏡頭畫面
     async function switchCamera(deviceId, label) {
         if (currentStream) {
-            currentStream.getTracks().forEach(t => t.stop()); // 關閉上一顆鏡頭
+            currentStream.getTracks().forEach(t => t.stop()); 
         }
         
-        // 依照名稱猜測是否為前置鏡頭來決定翻轉
         const lowerLabel = label.toLowerCase();
         isFrontCamera = (lowerLabel.includes('front') || lowerLabel.includes('前'));
         
@@ -264,7 +262,6 @@
         document.getElementById('guide-text').style.display = 'block';
         document.getElementById('disp-name').innerText = userName;
 
-        // 🔥 因為相機已經在預覽階段啟動了，這裡只需直接改變狀態並開始 AI 擷取即可！
         state = 1; 
         requestAnimationFrame(processVideoFrame);
     }
@@ -298,12 +295,19 @@
             drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
         }
         
+        // --- 點位擷取與平滑處理 ---
         const rawHeelY = Math.max(lm[29].y, lm[30].y);
         const heelY = smooth(rawHeelY, heelQueue, 5);
 
         const leftIdxY = lm[19].y, rightIdxY = lm[20].y;
         const rawHandTopY = Math.min(leftIdxY, rightIdxY); 
         const handTopY = smooth(rawHandTopY, handQueue, 5);
+
+        // ✅ 新增：計算真實重心 COM (Center of Mass)
+        const midHipY = (lm[23].y + lm[24].y) / 2;
+        const midShoulderY = (lm[11].y + lm[12].y) / 2;
+        const rawComY = midHipY * 0.6 + midShoulderY * 0.4;
+        const comY = smooth(rawComY, comQueue, 5); // 重心也需要平滑化
 
         const headY = lm[0].y; 
         const guide = document.getElementById('guide-text');
@@ -350,6 +354,7 @@
                     if ((Math.max(...stabilityQueue) - Math.min(...stabilityQueue)) < 0.02) {
                         pixelsPerCm = bodyPx / userHeight;
                         baseHeelY = heelY; 
+                        baseComY = comY; // ✅ 記錄站立時的重心高度
                         state = 2;
                         stabilityQueue = []; reachQueue = [];
                     }
@@ -376,22 +381,33 @@
             guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
             
             let footJumpCm = 0;
+            let comJumpCm = 0; // ✅ 新增：計算重心淨位移
+
             if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / pixelsPerCm;
+            if (baseComY - comY > 0) comJumpCm = (baseComY - comY) / pixelsPerCm;
             let currentReachCm = (baseHeelY - handTopY) / pixelsPerCm;
 
-            if (footJumpCm > 2) {
+            if (comJumpCm > 2) { // 改以重心位移作為跳躍門檻
                 let isNewMax = false;
                 if (footJumpCm > maxFootCm) { maxFootCm = footJumpCm; isNewMax = true; }
                 if (currentReachCm > maxReachCm) { maxReachCm = currentReachCm; isNewMax = true; }
+                
+                // ✅ 更新最高重心紀錄
+                if (comJumpCm > maxComJumpCm) { 
+                    maxComJumpCm = comJumpCm; 
+                    isNewMax = true; 
+                }
 
                 if (isNewMax) { updateRating(); }
 
+                // 🔥 改以「重心」來計算速度變號，完全不受空中縮腳的影響！
                 let velocity = 0;
-                if (lastHeelY !== null) {
-                    velocity = heelY - lastHeelY; 
+                if (lastComY !== null) {
+                    velocity = comY - lastComY; 
                 }
 
-                if (velocity > 0 && lastVelocity <= 0 && footJumpCm >= maxFootCm * 0.9) {
+                // 當重心開始下墜，且達到峰值附近時觸發快門
+                if (velocity > 0 && lastVelocity <= 0 && comJumpCm >= maxComJumpCm * 0.9) {
                     captureSnapshotImage();
                 }
 
@@ -399,8 +415,9 @@
             } else {
                 lastVelocity = 0; 
             }
-            lastHeelY = heelY; 
+            lastComY = comY; 
 
+            document.getElementById('disp-com-jump').innerText = maxComJumpCm.toFixed(1);
             document.getElementById('disp-max-foot').innerText = maxFootCm.toFixed(1);
             document.getElementById('disp-max-reach').innerText = maxReachCm.toFixed(1);
         }
@@ -409,7 +426,7 @@
     
     function updateRating() {
         let r = "D (加油)", color = "gray";
-        const h = maxFootCm; 
+        const h = maxComJumpCm; // ✅ 改以最客觀的「重心淨高」來評級
         if (userGender === 'male') {
             if (h >= 70) { r = "S (職業級)"; color = "red"; }
             else if (h >= 60) { r = "A (優秀)"; color = "orange"; }
@@ -440,17 +457,20 @@
         ctx.drawImage(videoElement, 0, 0, capCanvas.width, capCanvas.height);
         ctx.restore();
 
+        // 擴大黑底高度，容納新的數據
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(20, 20, 360, 180);
+        ctx.fillRect(20, 20, 360, 230);
         
         ctx.fillStyle = "#00FF00";
         ctx.font = "bold 32px Microsoft JhengHei";
         ctx.fillText(`受測者: ${userName}`, 40, 60);
+        ctx.fillStyle = "yellow"; // 重心顯示黃色
+        ctx.fillText(`重心淨高: ${maxComJumpCm.toFixed(1)} cm`, 40, 105);
         ctx.fillStyle = "#FFFFFF";
-        ctx.fillText(`腳離地: ${maxFootCm.toFixed(1)} cm`, 40, 110);
-        ctx.fillText(`最高摸高: ${maxReachCm.toFixed(1)} cm`, 40, 150);
+        ctx.fillText(`腳離地高: ${maxFootCm.toFixed(1)} cm`, 40, 145);
+        ctx.fillText(`最高摸高: ${maxReachCm.toFixed(1)} cm`, 40, 185);
         ctx.fillStyle = "orange";
-        ctx.fillText(`評級: ${jumpGradeStr}`, 40, 190);
+        ctx.fillText(`評級: ${jumpGradeStr}`, 40, 225);
 
         capturedImageURL = capCanvas.toDataURL('image/jpeg', 0.8);
         document.getElementById('snapshot-img').src = capturedImageURL;
@@ -483,13 +503,14 @@
     }
 
     function resetTest() {
-        state = 0; maxFootCm = 0; maxReachCm = 0; standingReachCm = 0;
+        state = 0; maxFootCm = 0; maxReachCm = 0; maxComJumpCm = 0; standingReachCm = 0;
         stabilityQueue = []; reachQueue = []; 
-        heelQueue = []; handQueue = []; 
-        lastHeelY = null; lastVelocity = 0;
+        heelQueue = []; handQueue = []; comQueue = [];
+        lastComY = null; lastVelocity = 0;
         capturedImageURL = null;
         document.getElementById('bound-warning').style.display = "none";
         document.getElementById('disp-stand-reach').innerText = "0.0";
+        document.getElementById('disp-com-jump').innerText = "0.0";
         document.getElementById('disp-max-foot').innerText = "0.0";
         document.getElementById('disp-max-reach').innerText = "0.0";
         document.getElementById('disp-rating').innerText = "評級: --";
