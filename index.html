@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (V16 雙鏡頭版)</title>
+    <title>AI 垂直跳高測驗 (V17 自訂鏡頭版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -13,7 +13,6 @@
     <style>
         body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
         #container { position: relative; width: 100vw; height: 100vh; }
-        /* 預設的鏡像翻轉將由 JS 動態控制 */
         video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; }
         canvas.overlay { pointer-events: none; }
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
@@ -23,10 +22,16 @@
             text-align: center; pointer-events: auto; width: 85%; max-width: 350px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        input, select { font-size: 18px; padding: 10px; margin: 10px 0; width: 90%; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        input, select { font-size: 16px; padding: 10px; margin: 8px 0; width: 100%; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
         button { background: #007bff; color: white; border: none; padding: 12px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; pointer-events: auto; }
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; }
+        
+        /* 針對鏡頭選擇區的排版 */
+        .camera-controls { display: flex; gap: 5px; align-items: center; width: 100%; margin: 8px 0; }
+        .camera-controls select { margin: 0; flex: 1; }
+        .camera-controls button { margin: 0; width: auto; padding: 10px; font-size: 14px; background: #6c757d; white-space: nowrap; }
+
         #info-box {
             position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: white;
             padding: 10px 15px; border-radius: 8px; text-align: right; pointer-events: none; font-size: 14px;
@@ -62,7 +67,7 @@
         <div id="bound-warning">⚠️ 警告：出框邊緣</div>
 
         <div id="setup-panel">
-            <h2>跳高測驗 V16<br><span style="font-size: 14px; color: #555;">(雙鏡頭修復版)</span></h2>
+            <h2>跳高測驗 V17<br><span style="font-size: 14px; color: #555;">(自訂實體鏡頭版)</span></h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
@@ -70,11 +75,15 @@
                 <option value="male">男</option>
                 <option value="female">女</option>
             </select>
-            <select id="camera_select">
-                <option value="user">前置鏡頭 (自拍)</option>
-                <option value="environment">後置鏡頭 (幫人測量)</option>
-            </select>
-            <br>
+            
+            <div class="camera-controls">
+                <select id="camera_select">
+                    <option value="user">自動: 前置自拍鏡頭</option>
+                    <option value="environment">自動: 後置主鏡頭</option>
+                </select>
+                <button id="btn-scan" onclick="scanCameras()">🔍 找廣角</button>
+            </div>
+
             <button id="btn-start" onclick="startApp()" disabled>等待載入...</button>
         </div>
 
@@ -113,9 +122,9 @@
     const statusText = document.getElementById('loading-status');
     const btnStart = document.getElementById('btn-start');
     
-    // 移除了衝突的 camera 變數
     let pose = null, stream = null;
-    let userHeight = 170, userName = "", userGender = "male", facingMode = "user";
+    let userHeight = 170, userName = "", userGender = "male";
+    let isFrontCamera = true; // 紀錄目前是否為前鏡頭，用來決定是否要鏡像翻轉
     
     let state = 0; 
     let pixelsPerCm = 0;
@@ -152,20 +161,50 @@
         pose.onResults(onResults);
     };
 
+    // ✅ 新增：掃描實體鏡頭清單
+    async function scanCameras() {
+        try {
+            // 必須先暫時取得一次相機權限，瀏覽器才會給我們真實的鏡頭名稱 (label)
+            const tempStream = await navigator.mediaDevices.getUserMedia({video: true});
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            
+            const select = document.getElementById('camera_select');
+            select.innerHTML = ''; // 清空原本的選項
+            
+            videoDevices.forEach((d, i) => {
+                const opt = document.createElement('option');
+                opt.value = d.deviceId; // 使用硬體專屬 ID
+                // 通常廣角鏡頭名稱會有 Wide 或 Ultra字眼
+                opt.text = d.label || `未命名鏡頭 ${i + 1}`;
+                select.appendChild(opt);
+            });
+            
+            // 掃描完畢，關閉暫時的相機權限
+            tempStream.getTracks().forEach(t => t.stop());
+            alert("✅ 掃描成功！\n請展開選單，尋找名稱帶有「Wide」、「Ultra」或「後置」的鏡頭。若選錯可按「換人」重選。");
+            
+        } catch (err) {
+            alert("無法掃描鏡頭，請確認已允許相機權限！\n" + err.message);
+        }
+    }
+
     function smooth(value, queue, size = 5){
         queue.push(value);
         if(queue.length > size) queue.shift();
         return queue.reduce((a, b) => a + b, 0) / queue.length;
     }
 
-    // ✅ V16 核心修復：使用原生 API 取代 MediaPipe 的 Camera 模組
     async function startApp() {
         userName = document.getElementById('p_name').value || "測試者";
         userHeight = parseFloat(document.getElementById('p_height').value);
         userGender = document.getElementById('p_gender').value;
-        facingMode = document.getElementById('camera_select').value;
         
         if(!userHeight || userHeight < 50) { alert("請輸入正確身高"); return; }
+
+        const camVal = document.getElementById('camera_select').value;
+        const camSelector = document.getElementById('camera_select');
+        const camText = camSelector.options[camSelector.selectedIndex].text.toLowerCase();
 
         document.getElementById('setup-panel').style.display = 'none';
         document.getElementById('info-box').style.display = 'block';
@@ -173,7 +212,21 @@
         document.getElementById('guide-text').style.display = 'block';
         document.getElementById('disp-name').innerText = userName;
 
-        if (facingMode === "user") {
+        let videoConstraints = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+
+        // 判斷使用者選的是「自動選項」還是「掃描出來的特定實體鏡頭」
+        if (camVal === 'user' || camVal === 'environment') {
+            videoConstraints.facingMode = camVal;
+            isFrontCamera = (camVal === 'user');
+        } else {
+            // 使用特定的實體鏡頭 ID
+            videoConstraints.deviceId = { exact: camVal };
+            // 藉由名稱猜測是否為前鏡頭 (用來判斷需不需要鏡像翻轉)
+            isFrontCamera = (camText.includes('front') || camText.includes('前'));
+        }
+
+        // ✅ 動態決定是否鏡像翻轉
+        if (isFrontCamera) {
             videoElement.style.transform = "scaleX(-1)";
             canvasElement.style.transform = "scaleX(-1)";
         } else {
@@ -182,16 +235,9 @@
         }
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    facingMode: facingMode, 
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                }
-            });
+            stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
             videoElement.srcObject = stream;
             
-            // 確保影片開始播放後，啟動畫面處理迴圈
             videoElement.onloadedmetadata = () => {
                 videoElement.play();
                 state = 1; 
@@ -199,12 +245,11 @@
             };
 
         } catch (err) {
-            alert("相機開啟失敗，請確認已給予權限！\n" + err.message);
+            alert("相機開啟失敗！可能該鏡頭已被佔用或權限不足。\n" + err.message);
             console.error(err);
         }
     }
 
-    // ✅ 自製的穩定畫面擷取迴圈
     async function processVideoFrame() {
         if (state > 0 && videoElement.readyState >= 2) {
             await pose.send({image: videoElement});
@@ -259,7 +304,6 @@
             boundWarning.style.display = "none";
         }
 
-        // 狀態 1: 身高校正與安全距離檢測
         if (state === 1) {
             guide.innerText = "步驟1: 請自然站立 (校正身高)"; 
             guide.style.color = "yellow";
@@ -293,7 +337,6 @@
                 }
             } else { guide.innerText = "請後退，確保全身入鏡"; stabilityQueue = []; }
         }
-        // 狀態 2: 摸高基準
         else if (state === 2) {
             guide.innerText = "步驟2: 單手舉高並靜止"; guide.style.color = "cyan";
             
@@ -310,7 +353,6 @@
                 }
             } else { reachQueue = []; guide.innerText = "手請舉高過頭"; }
         }
-        // 狀態 3: 跳躍測量
         else if (state === 3) {
             guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
             
@@ -372,7 +414,8 @@
         capCanvas.height = videoElement.videoHeight;
         
         ctx.save();
-        if (facingMode === "user") {
+        // ✅ 根據掃描出來的結果，決定照片是否翻轉
+        if (isFrontCamera) {
             ctx.translate(capCanvas.width, 0);
             ctx.scale(-1, 1);
         }
@@ -433,7 +476,6 @@
         document.getElementById('disp-max-reach').innerText = "0.0";
         document.getElementById('disp-rating').innerText = "評級: --";
         
-        // 重置為狀態1，並確保 requestAnimationFrame 繼續運行
         state = 1; 
         requestAnimationFrame(processVideoFrame);
     }
