@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 垂直跳高測驗 (V15 雙鏡頭防出框版)</title>
+    <title>AI 垂直跳高測驗 (V16 雙鏡頭版)</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -13,7 +13,7 @@
     <style>
         body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
         #container { position: relative; width: 100vw; height: 100vh; }
-        /* 預設的鏡像翻轉將由 JS 動態控制，這裡先移除預設的 scaleX(-1) */
+        /* 預設的鏡像翻轉將由 JS 動態控制 */
         video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; }
         canvas.overlay { pointer-events: none; }
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
@@ -45,7 +45,6 @@
         }
         #snapshot-img { width: 100%; border: 2px solid #0f0; border-radius: 8px; margin-bottom: 10px; }
         
-        /* 頂部警告橫幅 */
         #bound-warning {
             position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
             background: rgba(255, 0, 0, 0.8); color: white; padding: 8px 15px;
@@ -63,7 +62,7 @@
         <div id="bound-warning">⚠️ 警告：出框邊緣</div>
 
         <div id="setup-panel">
-            <h2>跳高測驗 V15<br><span style="font-size: 14px; color: #555;">(雙鏡頭防出框版)</span></h2>
+            <h2>跳高測驗 V16<br><span style="font-size: 14px; color: #555;">(雙鏡頭修復版)</span></h2>
             <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
             <input type="text" id="p_name" placeholder="受測者姓名">
             <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
@@ -114,7 +113,8 @@
     const statusText = document.getElementById('loading-status');
     const btnStart = document.getElementById('btn-start');
     
-    let pose = null, camera = null, stream = null;
+    // 移除了衝突的 camera 變數
+    let pose = null, stream = null;
     let userHeight = 170, userName = "", userGender = "male", facingMode = "user";
     
     let state = 0; 
@@ -137,7 +137,7 @@
     let capturedImageURL = null; 
 
     window.onload = function() {
-        if (typeof Pose === 'undefined' || typeof Camera === 'undefined') {
+        if (typeof Pose === 'undefined') {
             statusText.innerText = "❌ AI 載入失敗！請檢查網路連線";
             statusText.style.color = "red";
             return;
@@ -158,6 +158,7 @@
         return queue.reduce((a, b) => a + b, 0) / queue.length;
     }
 
+    // ✅ V16 核心修復：使用原生 API 取代 MediaPipe 的 Camera 模組
     async function startApp() {
         userName = document.getElementById('p_name').value || "測試者";
         userHeight = parseFloat(document.getElementById('p_height').value);
@@ -172,7 +173,6 @@
         document.getElementById('guide-text').style.display = 'block';
         document.getElementById('disp-name').innerText = userName;
 
-        // ✅ 動態鏡像翻轉處理 (前鏡頭翻轉，後鏡頭不翻轉)
         if (facingMode === "user") {
             videoElement.style.transform = "scaleX(-1)";
             canvasElement.style.transform = "scaleX(-1)";
@@ -182,25 +182,35 @@
         }
 
         try {
-            // ✅ 手動獲取影像流，強制高畫質與鏡頭選擇
             stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    facingMode: facingMode,
+                    facingMode: facingMode, 
                     width: { ideal: 1920 },
                     height: { ideal: 1080 }
                 }
             });
             videoElement.srcObject = stream;
             
-            camera = new Camera(videoElement, {
-                onFrame: async () => { await pose.send({image: videoElement}); },
-                width: 1920, height: 1080 
-            });
-            await camera.start();
-            state = 1; 
+            // 確保影片開始播放後，啟動畫面處理迴圈
+            videoElement.onloadedmetadata = () => {
+                videoElement.play();
+                state = 1; 
+                requestAnimationFrame(processVideoFrame);
+            };
+
         } catch (err) {
-            alert("相機開啟失敗，請確認已給予權限！");
+            alert("相機開啟失敗，請確認已給予權限！\n" + err.message);
             console.error(err);
+        }
+    }
+
+    // ✅ 自製的穩定畫面擷取迴圈
+    async function processVideoFrame() {
+        if (state > 0 && videoElement.readyState >= 2) {
+            await pose.send({image: videoElement});
+        }
+        if (state > 0) {
+            requestAnimationFrame(processVideoFrame);
         }
     }
 
@@ -224,7 +234,6 @@
             drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
         }
         
-        // 取得平滑化後的地板座標與手部座標 (數值為 0.0 ~ 1.0 的相對比例)
         const rawHeelY = Math.max(lm[29].y, lm[30].y);
         const heelY = smooth(rawHeelY, heelQueue, 5);
 
@@ -232,11 +241,10 @@
         const rawHandTopY = Math.min(leftIdxY, rightIdxY); 
         const handTopY = smooth(rawHandTopY, handQueue, 5);
 
-        const headY = lm[0].y; // 鼻子作為最高點參考
+        const headY = lm[0].y; 
         const guide = document.getElementById('guide-text');
         const boundWarning = document.getElementById('bound-warning');
 
-        // ✅ 防出框檢查 (狀態 2 與 3 適用)
         if (state === 2 || state === 3) {
             if (handTopY < 0.03) {
                 boundWarning.innerText = "⚠️ 手太靠近畫面上緣，測量可能失效！";
@@ -258,21 +266,18 @@
             
             if (lm[29].visibility > 0.5 && lm[0].visibility > 0.5) {
                 
-                // 🔥 核心修正：利用身高比例，嚴格計算 125cm 安全頭頂空間
-                const bodyPx = heelY - headY; // 畫面中人體的比例長度
-                const pxPerCm_est = bodyPx / userHeight; // 估算 1cm 佔據的畫面比例
-                const safeMarginRatio = pxPerCm_est * 125; // 125cm 所需要的畫面頂部預留比例
+                const bodyPx = heelY - headY; 
+                const pxPerCm_est = bodyPx / userHeight; 
+                const safeMarginRatio = pxPerCm_est * 125; 
 
-                // 如果頭頂距離畫面邊緣的距離 < 安全預留空間
                 if (headY < safeMarginRatio) {
                     guide.innerText = "⚠️ 請後退！頭頂需預留 125cm 空間（避免跳出畫面）";
                     guide.style.color = "red";
-                    stabilityQueue = []; // 中斷穩定判定，逼迫使用者退後
+                    stabilityQueue = []; 
                     canvasCtx.restore();
                     return; 
                 }
 
-                // 若安全距離通過，進入穩定讀取階段
                 stabilityQueue.push(heelY);
                 canvasCtx.fillStyle = "yellow";
                 canvasCtx.fillRect(0, h-20, (stabilityQueue.length/30)*w, 20);
@@ -341,7 +346,6 @@
         canvasCtx.restore();
     }
     
-    // --- 評級與快照功能 ---
     function updateRating() {
         let r = "D (加油)", color = "gray";
         const h = maxFootCm; 
@@ -368,7 +372,6 @@
         capCanvas.height = videoElement.videoHeight;
         
         ctx.save();
-        // ✅ 若為前鏡頭，快照需要翻轉回來；後鏡頭則維持正常原樣
         if (facingMode === "user") {
             ctx.translate(capCanvas.width, 0);
             ctx.scale(-1, 1);
@@ -429,7 +432,10 @@
         document.getElementById('disp-max-foot').innerText = "0.0";
         document.getElementById('disp-max-reach').innerText = "0.0";
         document.getElementById('disp-rating').innerText = "評級: --";
+        
+        // 重置為狀態1，並確保 requestAnimationFrame 繼續運行
         state = 1; 
+        requestAnimationFrame(processVideoFrame);
     }
 </script>
 
