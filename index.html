@@ -1,533 +1,524 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>前踢動作分析</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>垂直跳高測驗 (運動科學版)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: black;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden; 
+        body { margin: 0; padding: 0; font-family: 'Microsoft JhengHei', sans-serif; overflow: hidden; background: #000; }
+        #container { position: relative; width: 100vw; height: 100vh; }
+        video, canvas.overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+        canvas.overlay { pointer-events: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
+        #setup-panel {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.75); backdrop-filter: blur(5px);
+            padding: 25px; border-radius: 15px;
+            text-align: center; pointer-events: auto; width: 85%; max-width: 350px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        .camera-container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            z-index: 1;
-            transform-origin: center center;
-            transition: transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94); 
-            background-color: #000; /* 加上黑底讓 contain 旁邊不突兀 */
+        
+        input, select { font-size: 16px; padding: 10px; margin: 8px 0; width: 100%; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; padding: 12px 30px; font-size: 18px; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; pointer-events: auto; }
+        button:active { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        
+        #btn-preview { background: #28a745; margin-bottom: 10px; }
+        #btn-preview:active { background: #1e7e34; }
+
+        #info-box {
+            position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); color: white;
+            padding: 10px 15px; border-radius: 8px; text-align: right; pointer-events: none; font-size: 14px;
         }
-        /* 🔥 關鍵修正：改回 contain，保證最高點時腳不會被裁切掉 */
-        video, .output_canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: contain; 
+        .big-text { font-size: 22px; font-weight: bold; }
+        .green { color: #0f0; } .orange { color: orange; } .cyan { color: cyan;} .yellow { color: yellow; }
+        #guide-text {
+            position: absolute; bottom: 120px; width: 100%; text-align: center;
+            font-size: 22px; color: yellow; text-shadow: 2px 2px 4px #000; font-weight: bold; pointer-events: none;
         }
-        .ui-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 20;
-            pointer-events: none; 
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
+        #controls { position: absolute; bottom: 20px; width: 100%; text-align: center; pointer-events: auto; }
+        .btn-round { background: rgba(0, 0, 0, 0.6); border: 2px solid white; color: white; width: 65px; height: 65px; border-radius: 50%; margin: 0 5px; font-size: 13px; cursor: pointer; pointer-events: auto; }
+        #snapshot-panel {
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9); padding: 15px; border-radius: 10px; text-align: center; z-index: 100; pointer-events: auto; width: 80%; max-width: 400px;
         }
-        .top-panel, .bottom-panel {
-            pointer-events: auto; 
-            background: rgba(0, 0, 0, 0.65);
-            padding: 15px;
-            text-align: center;
-            color: white;
-            width: 100%;
-            box-sizing: border-box;
-            backdrop-filter: blur(8px); 
-            -webkit-backdrop-filter: blur(8px);
+        #snapshot-img { width: 100%; border: 2px solid #0f0; border-radius: 8px; margin-bottom: 10px; }
+        
+        #bound-warning {
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 0, 0, 0.8); color: white; padding: 8px 15px;
+            border-radius: 8px; font-weight: bold; font-size: 16px; display: none; z-index: 20;
         }
-        .controls {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-        }
-        button {
-            padding: 12px 20px;
-            font-size: 16px;
-            background-color: #3498db;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.5);
-            font-weight: bold;
-            transition: background 0.2s;
-        }
-        button:active { background-color: #2980b9; transform: translateY(2px); }
-        select {
-            padding: 10px;
-            font-size: 16px;
-            background-color: #2c3e50;
-            color: white;
-            border: 2px solid #3498db;
-            border-radius: 8px;
-            outline: none;
-            max-width: 80%;
-            display: none; 
-        }
-        .zoom-container {
-            margin: 10px auto 0;
-            width: 80%;
-            max-width: 300px;
-            display: none; 
-        }
-        .zoom-container input[type=range] {
-            width: 100%;
-            margin-top: 5px;
-        }
-        #downloadBtn {
-            background-color: #e67e22;
-            display: none;
-            margin: 10px auto 0 auto;
-            width: fit-content;
-        }
-        .status-display {
-            font-size: 18px;
-            color: #2ecc71;
-            font-weight: bold;
-            margin-top: 5px;
-            min-height: 24px;
-        }
-        .angle-info {
-            font-size: 24px;
-            font-weight: bold;
-        }
-        #currentAngle { color: white; }
-        #maxAngle { color: #f1c40f; font-size: 32px; }
-        #screenshotImg {
-            max-width: 40%;
-            max-height: 20vh;
-            border: 2px solid #f1c40f;
-            border-radius: 8px;
-            display: none;
-            position: absolute;
-            bottom: 130px;
-            right: 15px;
-            z-index: 30;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.8);
-            pointer-events: auto;
-            -webkit-touch-callout: default; 
-            background-color: #000;
-        }
-        #debugLog { font-size: 12px; color: #e74c3c; margin-top: 5px; word-wrap: break-word; }
     </style>
 </head>
 <body>
 
-    <div class="camera-container" id="cameraContainer">
-        <video id="videoElement" playsinline autoplay muted style="position:absolute; width:1px; height:1px; left:-9999px;"></video>
-        <canvas class="output_canvas"></canvas>
-        <canvas id="buffer_canvas" style="display:none;"></canvas>
+<div id="container">
+    <video id="input_video" playsinline muted></video>
+    <canvas id="output_canvas" class="overlay"></canvas>
+    
+    <div id="ui-layer">
+        <div id="bound-warning">⚠️ 警告：出框邊緣</div>
+
+        <div id="setup-panel">
+            <h2>跳高測驗 V19<br><span style="font-size: 14px; color: #555;">(運動科學重心版)</span></h2>
+            <div id="loading-status" style="font-size: 14px; color: #666; margin-bottom: 10px;">正在下載 AI 模型...</div>
+            
+            <input type="text" id="p_name" placeholder="受測者姓名">
+            <input type="number" id="p_height" placeholder="身高 (cm)" value="170">
+            <select id="p_gender">
+                <option value="male">男</option>
+                <option value="female">女</option>
+            </select>
+            
+            <button id="btn-preview" onclick="startPreview()">👁️ 允許相機並開啟預覽</button>
+            <select id="camera_select" style="display: none;"></select>
+
+            <button id="btn-start" onclick="startApp()" disabled>等待載入與權限...</button>
+        </div>
+
+        <div id="info-box" style="display:none;">
+            <div id="disp-name" style="font-size:18px; margin-bottom:5px;">--</div>
+            <div>站立摸高: <span id="disp-stand-reach" class="cyan">0.0</span> cm</div>
+            <hr style="border-color: #555; margin: 5px 0;">
+            <div>重心淨高: <span id="disp-com-jump" class="yellow big-text">0.0</span></div>
+            <div>腳離地高: <span id="disp-max-foot" class="orange big-text">0.0</span></div>
+            <div>最高摸高: <span id="disp-max-reach" class="green big-text">0.0</span></div>
+            <div id="disp-rating" style="margin-top:5px;">評級: --</div>
+        </div>
+        
+        <div id="guide-text" style="display:none;">準備中...</div>
+
+        <div id="controls" style="display:none;">
+            <button class="btn-round" onclick="resetTest()">重測<br>(R)</button>
+            <button class="btn-round" onclick="showSnapshot()">查看<br>照片</button>
+            <button class="btn-round" onclick="location.reload()">換人<br>(N)</button>
+        </div>
     </div>
 
-    <div class="ui-layer">
-        <div class="top-panel">
-            <div class="controls">
-                <button id="startBtn">啟動鏡頭</button>
-                <select id="cameraSelect"></select>
-            </div>
-            <div class="zoom-container" id="zoomContainer">
-                <label for="zoomSlider">🔍 調整畫面遠近：</label>
-                <input type="range" id="zoomSlider" min="0.7" max="3" step="0.1" value="1">
-            </div>
-            <div class="status-display" id="statusText">等待啟動...</div>
-            <div id="debugLog"></div>
-        </div>
-        <div class="bottom-panel">
-            <div class="angle-info">目前角度: <span id="currentAngle">0</span>°</div>
-            <div class="angle-info" id="finalAngleText">最高點角度: <span id="maxAngle">0</span>°</div>
-            <button id="downloadBtn">⬇️ 儲存最高點</button>
-        </div>
+    <div id="snapshot-panel">
+        <h3 style="color:white; margin-top:0;">最高點紀錄</h3>
+        <img id="snapshot-img" src="" alt="Snapshot">
+        <button onclick="document.getElementById('snapshot-panel').style.display='none'">關閉</button>
+        <button onclick="downloadSnapshot()" style="background:#28a745;">下載儲存</button>
     </div>
+    
+    <canvas id="capture_canvas" style="display:none;"></canvas>
+</div>
 
-    <img id="screenshotImg" alt="截圖">
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const statusText = document.getElementById('loading-status');
+    const btnStart = document.getElementById('btn-start');
+    
+    let pose = null, currentStream = null;
+    let userHeight = 170, userName = "", userGender = "male";
+    let isFrontCamera = true; 
+    
+    let state = 0; 
+    let pixelsPerCm = 0;
+    
+    // 基準線
+    let baseHeelY = 0; 
+    let baseComY = 0; // ✅ 新增：重心基準線
+    
+    // 最高數據
+    let standingReachCm = 0; 
+    let maxFootCm = 0;  
+    let maxReachCm = 0; 
+    let maxComJumpCm = 0; // ✅ 新增：最高重心位移
+    let jumpGradeStr = "--";
 
-    <script>
-        const videoElement = document.getElementById('videoElement');
-        const canvasElement = document.getElementsByClassName('output_canvas')[0];
-        const canvasCtx = canvasElement.getContext('2d');
-        const bufferCanvas = document.getElementById('buffer_canvas');
-        const bufferCtx = bufferCanvas.getContext('2d');
-        const cameraContainer = document.getElementById('cameraContainer');
+    // 物理偵測 (改用重心來算速度，更準確！)
+    let lastComY = null;
+    let lastVelocity = 0;
 
-        const currentAngleEl = document.getElementById('currentAngle');
-        const statusTextEl = document.getElementById('statusText');
-        const maxAngleEl = document.getElementById('maxAngle');
-        const screenshotImg = document.getElementById('screenshotImg');
-        const debugLog = document.getElementById('debugLog');
-        
-        const startBtn = document.getElementById('startBtn');
-        const cameraSelect = document.getElementById('cameraSelect'); 
-        const downloadBtn = document.getElementById('downloadBtn');
-        const zoomContainer = document.getElementById('zoomContainer');
-        const zoomSlider = document.getElementById('zoomSlider');
+    let stabilityQueue = [];
+    let reachQueue = [];
+    let heelQueue = [];
+    let handQueue = [];
+    let comQueue = []; // ✅ 重心平滑 Queue
+    const STABILITY_THRES = 0.05;
+    let capturedImageURL = null; 
 
-        let useFrontCamera = false; 
-        let currentStream = null;
-        let videoDevices = [];
-        let currentDeviceIndex = 0;
-        let currentZoomLevel = 1.0;
+    let isAiLoaded = false;
+    let isPreviewReady = false;
 
-        let poseLoaded = false;
-        let isProcessingFrame = false; 
-        let isCameraSwitching = false; 
-        let hasStartedLoop = false;    
-        let lastTime = 0; 
-        
-        let isKicking = false;
-        let currentMaxAngle = 0;
-        let smoothedAngle = 0;       
-        let dropFrameCount = 0;      
-        
-        const START_KICK_THRESHOLD = 40; 
-        // 🔥 關鍵修正：放寬結束條件與增加穩定觀察期
-        const END_KICK_DROP = 20;    
-        const STABLE_FRAMES = 5;     
-
-        function calculateAngle(hip1, ankle1, hip2, ankle2, canvasW, canvasH) {
-            const dx1 = (ankle1.x - hip1.x) * canvasW;
-            const dy1 = (ankle1.y - hip1.y) * canvasH;
-            const dx2 = (ankle2.x - hip2.x) * canvasW;
-            const dy2 = (ankle2.y - hip2.y) * canvasH;
-            
-            const dotProduct = dx1 * dx2 + dy1 * dy2;
-            const mag1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
-            const mag2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-            
-            if (mag1 === 0 || mag2 === 0) return 0;
-            return Math.acos(dotProduct / (mag1 * mag2)) * (180 / Math.PI);
+    window.onload = function() {
+        if (typeof Pose === 'undefined') {
+            statusText.innerText = "❌ AI 載入失敗！請檢查網路連線";
+            statusText.style.color = "red";
+            return;
         }
-
-        // ⭐ 儲存候選最高點 (不使用 toDataURL 防止卡頓漏幀)
-        function captureMaxPointFrame(landmarks) {
-            if (videoElement.readyState < 2) return; 
-            if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) return;
-
-            bufferCtx.save();
-            bufferCtx.clearRect(0, 0, bufferCanvas.width, bufferCanvas.height);
-            
-            if (useFrontCamera) {
-                bufferCtx.translate(bufferCanvas.width, 0);
-                bufferCtx.scale(-1, 1);
-            }
-            
-            bufferCtx.drawImage(videoElement, 0, 0, bufferCanvas.width, bufferCanvas.height);
-            
-            if (landmarks) {
-                drawConnectors(bufferCtx, landmarks, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                drawLandmarks(bufferCtx, landmarks, {color: '#FF0000', lineWidth: 2});
-            }
-            bufferCtx.restore();
-        }
-
-        const pose = new Pose({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-        }});
-        pose.setOptions({
-            modelComplexity: 1, 
-            smoothLandmarks: true,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-
+        statusText.innerText = "✅ AI 模組就緒，請開啟預覽";
+        statusText.style.color = "green";
+        isAiLoaded = true;
+        
+        pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+        pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
         pose.onResults(onResults);
-        pose.initialize().then(() => {
-            poseLoaded = true;
-            if(statusTextEl.innerText === "等待啟動...") {
-                statusTextEl.innerText = "模型就緒，請點擊啟動";
-            }
-        });
+        
+        checkReadyStatus();
+    };
 
-        function onResults(results) {
-            if (isCameraSwitching) return;
-
-            canvasElement.width = videoElement.videoWidth;
-            canvasElement.height = videoElement.videoHeight;
-            bufferCanvas.width = videoElement.videoWidth;
-            bufferCanvas.height = videoElement.videoHeight;
-            
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            
-            if (useFrontCamera) {
-                canvasCtx.translate(canvasElement.width, 0);
-                canvasCtx.scale(-1, 1);
-            }
-            
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-
-            if (results.poseLandmarks) {
-                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#FF0000', lineWidth: 2});
-
-                const landmarks = results.poseLandmarks;
-                const leftHip = landmarks[23];
-                const rightHip = landmarks[24];
-                const leftAnkle = landmarks[27];
-                const rightAnkle = landmarks[28];
-
-                if (leftHip.visibility > 0.2 && rightHip.visibility > 0.2 && 
-                    leftAnkle.visibility > 0.2 && rightAnkle.visibility > 0.2) {
-                    
-                    let rawAngle = calculateAngle(
-                        leftHip, leftAnkle, rightHip, rightAnkle, 
-                        canvasElement.width, canvasElement.height
-                    );
-
-                    if (smoothedAngle === 0) {
-                        smoothedAngle = rawAngle; 
-                    } else {
-                        smoothedAngle = (rawAngle * 0.6) + (smoothedAngle * 0.4); 
-                    }
-                    
-                    let angle = Math.round(smoothedAngle);
-                    currentAngleEl.innerText = angle;
-                    currentAngleEl.style.color = "white";
-
-                    // ==== 核心邏輯：動態捕捉最高點 ====
-                    if (!isKicking && angle > START_KICK_THRESHOLD) {
-                        // 開始踢擊
-                        isKicking = true;
-                        currentMaxAngle = angle;
-                        dropFrameCount = 0; 
-                        
-                        statusTextEl.innerText = "💥 捕捉最高點中...";
-                        statusTextEl.style.color = "#e74c3c"; 
-                        downloadBtn.style.display = "none";
-                        screenshotImg.style.display = "none";
-                        
-                        captureMaxPointFrame(landmarks); 
-
-                    } else if (isKicking) {
-                        if (angle > currentMaxAngle) {
-                            // ⭐ 只要大於當前最大角度，立刻覆蓋 bufferCanvas (無卡頓更新最高點)
-                            currentMaxAngle = angle;
-                            dropFrameCount = 0; 
-                            
-                            captureMaxPointFrame(landmarks); 
-                            
-                        } else if (angle < currentMaxAngle - END_KICK_DROP) {
-                            dropFrameCount++;
-
-                            // ⭐ 確保經過 STABLE_FRAMES (5幀) 的確認，才認定真的結束
-                            if (dropFrameCount >= STABLE_FRAMES) {
-                                isKicking = false;
-                                statusTextEl.innerText = "✅ 完成！請看右下角截圖";
-                                statusTextEl.style.color = "#2ecc71"; 
-                                maxAngleEl.innerText = currentMaxAngle;
-                                
-                                // 踢擊結束，從完美儲存著「最高點畫面」的 buffer 提煉圖片
-                                bufferCanvas.toBlob((blob) => {
-                                    if (!blob) return;
-                                    const objectUrl = URL.createObjectURL(blob);
-                                    
-                                    screenshotImg.src = objectUrl;
-                                    screenshotImg.style.display = "block";
-                                    downloadBtn.style.display = "block"; 
-                                    
-                                    downloadBtn.onclick = async () => {
-                                        try {
-                                            const file = new File([blob], `kick_${maxAngleEl.innerText}deg.jpg`, { type: 'image/jpeg' });
-                                            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                                                await navigator.share({
-                                                    files: [file],
-                                                    title: '前踢最高點紀錄',
-                                                    text: `完美捕捉！最高點角度：${maxAngleEl.innerText} 度`
-                                                });
-                                            } else {
-                                                const link = document.createElement('a');
-                                                link.download = `kick_${maxAngleEl.innerText}deg.jpg`;
-                                                link.href = objectUrl;
-                                                link.click();
-                                            }
-                                        } catch (e) {
-                                            alert("請直接【長按】畫面右下角的截圖，選擇「儲存圖片」即可！");
-                                        }
-                                    };
-                                }, 'image/jpeg', 0.9);
-                                
-                                currentMaxAngle = 0;
-                                dropFrameCount = 0;
-                                smoothedAngle = 0;
-                            }
-                        } else {
-                            // 角度微小波動，不清零
-                            dropFrameCount = 0;
-                        }
-                    }
-                } else {
-                    currentAngleEl.style.color = "#95a5a6";
-                }
-            }
-            canvasCtx.restore();
+    function checkReadyStatus() {
+        if (isAiLoaded && isPreviewReady) {
+            btnStart.innerText = "開始測驗";
+            btnStart.disabled = false;
         }
+    }
 
-        function stopMediaTracks(stream) {
-            if (stream) stream.getTracks().forEach(track => track.stop());
-        }
-
-        function populateCameraList() {
-            cameraSelect.innerHTML = "";
-            videoDevices.forEach((device, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.text = device.label || `未命名鏡頭 ${index + 1}`;
-                cameraSelect.appendChild(option);
+    async function startPreview() {
+        try {
+            currentStream = await navigator.mediaDevices.getUserMedia({video: true});
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            const select = document.getElementById('camera_select');
+            select.innerHTML = ''; 
+            
+            videoDevices.forEach((d, i) => {
+                const opt = document.createElement('option');
+                opt.value = d.deviceId;
+                opt.text = d.label || `未命名鏡頭 ${i + 1}`;
+                select.appendChild(opt);
             });
-            cameraSelect.value = currentDeviceIndex;
-            cameraSelect.style.display = "inline-block"; 
-        }
-
-        async function getCameras() {
-            try {
-                if (videoDevices.length === 0) {
-                    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                    stopMediaTracks(tempStream);
-                }
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                videoDevices = devices.filter(d => d.kind === 'videoinput');
-                
-                const preferred = videoDevices.findIndex(d => {
-                    const label = d.label.toLowerCase();
-                    return (label.includes('back') || label.includes('rear') || label.includes('environment')) &&
-                           !label.includes('tele') && !label.includes('zoom') && 
-                           !label.includes('ir ') && !label.includes('depth');
-                });
-                currentDeviceIndex = preferred !== -1 ? preferred : 0;
-                populateCameraList();
-            } catch (err) {
-                console.error("獲取鏡頭列表失敗:", err);
-            }
-        }
-
-        async function startCamera() {
-            if (!poseLoaded) { alert("AI 模型尚未準備好，請稍等。"); return; }
-            if (isCameraSwitching) return; 
-
-            isCameraSwitching = true; 
-            statusTextEl.innerText = "切換鏡頭中...";
-            statusTextEl.style.color = "#f1c40f";
-
-            while (isProcessingFrame) {
-                await new Promise(r => setTimeout(r, 10));
-            }
             
-            if (currentStream) {
-                stopMediaTracks(currentStream);
-                videoElement.pause();
-                videoElement.srcObject = null; 
-                videoElement.load(); 
-                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-                bufferCtx.clearRect(0, 0, bufferCanvas.width, bufferCanvas.height);
+            select.onchange = (e) => {
+                const selectedText = select.options[select.selectedIndex].text;
+                switchCamera(e.target.value, selectedText);
+            };
+            
+            document.getElementById('btn-preview').style.display = 'none';
+            select.style.display = 'block';
+            
+            if(videoDevices.length > 0) {
+                switchCamera(videoDevices[0].deviceId, videoDevices[0].label);
             }
 
-            await new Promise(resolve => setTimeout(resolve, 300));
+            isPreviewReady = true;
+            checkReadyStatus();
+            
+        } catch (err) {
+            alert("無法開啟相機，請確認已給予權限！\n" + err.message);
+        }
+    }
 
-            const device = videoDevices[currentDeviceIndex];
-            const deviceId = device ? { exact: device.deviceId } : undefined;
-            if (device) {
-                const label = device.label.toLowerCase();
-                useFrontCamera = label.includes('front') || label.includes('user') || label.includes('selfie');
-            }
+    async function switchCamera(deviceId, label) {
+        if (currentStream) {
+            currentStream.getTracks().forEach(t => t.stop()); 
+        }
+        
+        const lowerLabel = label.toLowerCase();
+        isFrontCamera = (lowerLabel.includes('front') || lowerLabel.includes('前'));
+        
+        if (isFrontCamera) {
+            videoElement.style.transform = "scaleX(-1)";
+            canvasElement.style.transform = "scaleX(-1)";
+        } else {
+            videoElement.style.transform = "scaleX(1)";
+            canvasElement.style.transform = "scaleX(1)";
+        }
 
-            let constraints = { video: { deviceId: deviceId, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
-
-            try {
-                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-            } catch (err) {
-                constraints.video.width = { ideal: 640 };
-                constraints.video.height = { ideal: 480 };
-                try {
-                    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-                } catch (fallbackErr) {
-                    isCameraSwitching = false;
-                    statusTextEl.innerText = "啟動失敗，請重試";
-                    return;
+        try {
+            currentStream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    deviceId: { exact: deviceId },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
                 }
-            }
-
+            });
             videoElement.srcObject = currentStream;
-            
-            await new Promise((resolve) => { videoElement.onloadeddata = () => resolve(); });
-            
-            await videoElement.play();
-            
-            statusTextEl.innerText = `已切換 (${useFrontCamera ? '前鏡頭 / 鏡像' : '後鏡頭 / 正常'})`;
-            statusTextEl.style.color = "#2ecc71";
-            startBtn.style.display = "none"; 
-            zoomContainer.style.display = "block"; 
-            
-            isCameraSwitching = false; 
+            videoElement.play();
+        } catch (err) {
+            console.error("切換鏡頭失敗", err);
+        }
+    }
 
-            if (!hasStartedLoop) {
-                hasStartedLoop = true;
-                requestAnimationFrame(processFrame);
-            }
+    function smooth(value, queue, size = 5){
+        queue.push(value);
+        if(queue.length > size) queue.shift();
+        return queue.reduce((a, b) => a + b, 0) / queue.length;
+    }
+
+    async function startApp() {
+        userName = document.getElementById('p_name').value || "測試者";
+        userHeight = parseFloat(document.getElementById('p_height').value);
+        userGender = document.getElementById('p_gender').value;
+        
+        if(!userHeight || userHeight < 50) { alert("請輸入正確身高"); return; }
+
+        document.getElementById('setup-panel').style.display = 'none';
+        document.getElementById('info-box').style.display = 'block';
+        document.getElementById('controls').style.display = 'block';
+        document.getElementById('guide-text').style.display = 'block';
+        document.getElementById('disp-name').innerText = userName;
+
+        state = 1; 
+        requestAnimationFrame(processVideoFrame);
+    }
+
+    async function processVideoFrame() {
+        if (state > 0 && videoElement.readyState >= 2) {
+            await pose.send({image: videoElement});
+        }
+        if (state > 0) {
+            requestAnimationFrame(processVideoFrame);
+        }
+    }
+
+    function onResults(results) {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        const w = canvasElement.width, h = canvasElement.height;
+        
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, w, h);
+        
+        if (!results.poseLandmarks) {
+            document.getElementById('guide-text').innerText = "未偵測到全身...";
+            canvasCtx.restore();
+            return;
         }
 
-        async function processFrame(timestamp) {
-            if (timestamp - lastTime < 33) {
-                requestAnimationFrame(processFrame);
-                return;
-            }
-            lastTime = timestamp;
+        const lm = results.poseLandmarks;
+        if(state === 1 || state === 2) {
+            drawConnectors(canvasCtx, lm, POSE_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
+            drawLandmarks(canvasCtx, lm, {color: '#FF0000', lineWidth: 1});
+        }
+        
+        // --- 點位擷取與平滑處理 ---
+        const rawHeelY = Math.max(lm[29].y, lm[30].y);
+        const heelY = smooth(rawHeelY, heelQueue, 5);
 
-            if (!videoElement.paused && !videoElement.ended && !isProcessingFrame && !isCameraSwitching && videoElement.videoWidth > 0) {
-                isProcessingFrame = true;
-                try {
-                    await pose.send({image: videoElement});
-                } catch (e) {
-                    console.error("AI 異常:", e);
+        const leftIdxY = lm[19].y, rightIdxY = lm[20].y;
+        const rawHandTopY = Math.min(leftIdxY, rightIdxY); 
+        const handTopY = smooth(rawHandTopY, handQueue, 5);
+
+        // ✅ 新增：計算真實重心 COM (Center of Mass)
+        const midHipY = (lm[23].y + lm[24].y) / 2;
+        const midShoulderY = (lm[11].y + lm[12].y) / 2;
+        const rawComY = midHipY * 0.6 + midShoulderY * 0.4;
+        const comY = smooth(rawComY, comQueue, 5); // 重心也需要平滑化
+
+        const headY = lm[0].y; 
+        const guide = document.getElementById('guide-text');
+        const boundWarning = document.getElementById('bound-warning');
+
+        if (state === 2 || state === 3) {
+            if (handTopY < 0.03) {
+                boundWarning.innerText = "⚠️ 手太靠近畫面上緣，測量可能失效！";
+                boundWarning.style.display = "block";
+            } else if (rawHeelY > 0.97) {
+                boundWarning.innerText = "⚠️ 腳太靠近畫面底緣，請退後！";
+                boundWarning.style.display = "block";
+            } else {
+                boundWarning.style.display = "none";
+            }
+        } else {
+            boundWarning.style.display = "none";
+        }
+
+        if (state === 1) {
+            guide.innerText = "步驟1: 請自然站立 (校正身高)"; 
+            guide.style.color = "yellow";
+            
+            if (lm[29].visibility > 0.5 && lm[0].visibility > 0.5) {
+                
+                const bodyPx = heelY - headY; 
+                const pxPerCm_est = bodyPx / userHeight; 
+                const safeMarginRatio = pxPerCm_est * 125; 
+
+                if (headY < safeMarginRatio) {
+                    guide.innerText = "⚠️ 請後退！頭頂需預留 125cm 空間（避免跳出畫面）";
+                    guide.style.color = "red";
+                    stabilityQueue = []; 
+                    canvasCtx.restore();
+                    return; 
                 }
-                isProcessingFrame = false; 
-            }
-            requestAnimationFrame(processFrame);
+
+                stabilityQueue.push(heelY);
+                canvasCtx.fillStyle = "yellow";
+                canvasCtx.fillRect(0, h-20, (stabilityQueue.length/30)*w, 20);
+                
+                if (stabilityQueue.length > 30) {
+                    stabilityQueue.shift();
+                    if ((Math.max(...stabilityQueue) - Math.min(...stabilityQueue)) < 0.02) {
+                        pixelsPerCm = bodyPx / userHeight;
+                        baseHeelY = heelY; 
+                        baseComY = comY; // ✅ 記錄站立時的重心高度
+                        state = 2;
+                        stabilityQueue = []; reachQueue = [];
+                    }
+                }
+            } else { guide.innerText = "請後退，確保全身入鏡"; stabilityQueue = []; }
         }
+        else if (state === 2) {
+            guide.innerText = "步驟2: 單手舉高並靜止"; guide.style.color = "cyan";
+            
+            let currReachCm = (baseHeelY - handTopY) / pixelsPerCm;
+            if(currReachCm > 0) document.getElementById('disp-stand-reach').innerText = currReachCm.toFixed(1);
 
-        startBtn.addEventListener('click', async () => {
-            startBtn.disabled = true;
-            await getCameras();
-            await startCamera();
-        });
+            if (handTopY < headY) {
+                reachQueue.push(handTopY);
+                if(reachQueue.length > 30) reachQueue.shift();
+                if (reachQueue.length === 30 && (Math.max(...reachQueue) - Math.min(...reachQueue)) < STABILITY_THRES) {
+                    standingReachCm = currReachCm;
+                    document.getElementById('disp-stand-reach').innerText = standingReachCm.toFixed(1);
+                    state = 3;
+                }
+            } else { reachQueue = []; guide.innerText = "手請舉高過頭"; }
+        }
+        else if (state === 3) {
+            guide.innerText = "步驟3: 跳！"; guide.style.color = "#0f0";
+            
+            let footJumpCm = 0;
+            let comJumpCm = 0; // ✅ 新增：計算重心淨位移
 
-        cameraSelect.addEventListener('change', async (e) => {
-            if (isCameraSwitching) return;
-            currentDeviceIndex = parseInt(e.target.value);
-            await startCamera();
-        });
+            if (baseHeelY - heelY > 0) footJumpCm = (baseHeelY - heelY) / pixelsPerCm;
+            if (baseComY - comY > 0) comJumpCm = (baseComY - comY) / pixelsPerCm;
+            let currentReachCm = (baseHeelY - handTopY) / pixelsPerCm;
 
-        zoomSlider.addEventListener('input', (e) => {
-            currentZoomLevel = parseFloat(e.target.value);
-            cameraContainer.style.transform = `scale(${currentZoomLevel})`;
-        });
+            if (comJumpCm > 2) { // 改以重心位移作為跳躍門檻
+                let isNewMax = false;
+                if (footJumpCm > maxFootCm) { maxFootCm = footJumpCm; isNewMax = true; }
+                if (currentReachCm > maxReachCm) { maxReachCm = currentReachCm; isNewMax = true; }
+                
+                // ✅ 更新最高重心紀錄
+                if (comJumpCm > maxComJumpCm) { 
+                    maxComJumpCm = comJumpCm; 
+                    isNewMax = true; 
+                }
 
-    </script>
+                if (isNewMax) { updateRating(); }
+
+                // 🔥 改以「重心」來計算速度變號，完全不受空中縮腳的影響！
+                let velocity = 0;
+                if (lastComY !== null) {
+                    velocity = comY - lastComY; 
+                }
+
+                // 當重心開始下墜，且達到峰值附近時觸發快門
+                if (velocity > 0 && lastVelocity <= 0 && comJumpCm >= maxComJumpCm * 0.9) {
+                    captureSnapshotImage();
+                }
+
+                lastVelocity = velocity;
+            } else {
+                lastVelocity = 0; 
+            }
+            lastComY = comY; 
+
+            document.getElementById('disp-com-jump').innerText = maxComJumpCm.toFixed(1);
+            document.getElementById('disp-max-foot').innerText = maxFootCm.toFixed(1);
+            document.getElementById('disp-max-reach').innerText = maxReachCm.toFixed(1);
+        }
+        canvasCtx.restore();
+    }
+    
+    function updateRating() {
+        let r = "D (加油)", color = "gray";
+        const h = maxComJumpCm; // ✅ 改以最客觀的「重心淨高」來評級
+        if (userGender === 'male') {
+            if (h >= 70) { r = "S (職業級)"; color = "red"; }
+            else if (h >= 60) { r = "A (優秀)"; color = "orange"; }
+            else if (h >= 50) { r = "B (良好)"; color = "#0f0"; }
+            else if (h >= 40) { r = "C (平均)"; color = "yellow"; }
+        } else {
+            if (h >= 60) { r = "S (職業級)"; color = "red"; }
+            else if (h >= 50) { r = "A (優秀)"; color = "orange"; }
+            else if (h >= 40) { r = "B (良好)"; color = "#0f0"; }
+            else if (h >= 30) { r = "C (平均)"; color = "yellow"; }
+        }
+        jumpGradeStr = r;
+        const rb = document.getElementById('disp-rating');
+        rb.innerText = `評級: ${r}`; rb.style.color = color;
+    }
+
+    function captureSnapshotImage() {
+        const capCanvas = document.getElementById('capture_canvas');
+        const ctx = capCanvas.getContext('2d');
+        capCanvas.width = videoElement.videoWidth;
+        capCanvas.height = videoElement.videoHeight;
+        
+        ctx.save();
+        if (isFrontCamera) {
+            ctx.translate(capCanvas.width, 0);
+            ctx.scale(-1, 1);
+        }
+        ctx.drawImage(videoElement, 0, 0, capCanvas.width, capCanvas.height);
+        ctx.restore();
+
+        // 擴大黑底高度，容納新的數據
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.fillRect(20, 20, 360, 230);
+        
+        ctx.fillStyle = "#00FF00";
+        ctx.font = "bold 32px Microsoft JhengHei";
+        ctx.fillText(`受測者: ${userName}`, 40, 60);
+        ctx.fillStyle = "yellow"; // 重心顯示黃色
+        ctx.fillText(`重心淨高: ${maxComJumpCm.toFixed(1)} cm`, 40, 105);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(`腳離地高: ${maxFootCm.toFixed(1)} cm`, 40, 145);
+        ctx.fillText(`最高摸高: ${maxReachCm.toFixed(1)} cm`, 40, 185);
+        ctx.fillStyle = "orange";
+        ctx.fillText(`評級: ${jumpGradeStr}`, 40, 225);
+
+        capturedImageURL = capCanvas.toDataURL('image/jpeg', 0.8);
+        document.getElementById('snapshot-img').src = capturedImageURL;
+    }
+
+    function showSnapshot() {
+        if (!capturedImageURL) { alert("尚未產生跳躍紀錄！請先進行跳躍。"); return; }
+        document.getElementById('snapshot-panel').style.display = 'block';
+    }
+
+    function downloadSnapshot() {
+        if (!capturedImageURL) return;
+
+        fetch(capturedImageURL)
+            .then(res => res.blob())
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${userName}_跳高成績.jpg`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            })
+            .catch(err => {
+                alert("下載失敗，請嘗試用 Chrome 或 Safari 瀏覽器開啟！");
+                console.error(err);
+            });
+    }
+
+    function resetTest() {
+        state = 0; maxFootCm = 0; maxReachCm = 0; maxComJumpCm = 0; standingReachCm = 0;
+        stabilityQueue = []; reachQueue = []; 
+        heelQueue = []; handQueue = []; comQueue = [];
+        lastComY = null; lastVelocity = 0;
+        capturedImageURL = null;
+        document.getElementById('bound-warning').style.display = "none";
+        document.getElementById('disp-stand-reach').innerText = "0.0";
+        document.getElementById('disp-com-jump').innerText = "0.0";
+        document.getElementById('disp-max-foot').innerText = "0.0";
+        document.getElementById('disp-max-reach').innerText = "0.0";
+        document.getElementById('disp-rating').innerText = "評級: --";
+        
+        state = 1; 
+        requestAnimationFrame(processVideoFrame);
+    }
+</script>
+
 </body>
 </html>
