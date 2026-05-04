@@ -87,11 +87,11 @@
 
         <div id="info-box" style="display:none;">
             <div id="disp-name" style="font-size:18px; margin-bottom:5px;">--</div>
-            <div>物理滯空: <span id="disp-flight-jump" class="yellow big-text">0.0</span> cm</div>
             <hr style="border-color: #555; margin: 5px 0;">
             <div>視覺重心: <span id="disp-com-jump" class="orange">0.0</span></div>
             <div>最高摸高: <span id="disp-max-reach" class="green">0.0</span></div>
-            <div id="disp-rating" style="margin-top:5px; font-weight:bold;">評級: --</div>
+            <div id="disp-rating" style="margin-top:5px; font-weight:bold; margin-bottom: 5px;">評級: --</div>
+            <div style="color: white;">滯空時間推估高度: <span id="disp-flight-jump" class="big-text" style="color: white;">0.0</span> cm</div>
         </div>
         
         <div id="guide-text" style="display:none;">準備中...</div>
@@ -477,16 +477,17 @@
         ctx.font = "bold 32px Microsoft JhengHei";
         ctx.fillText(`受測者: ${userName}`, 40, 60);
         
-        // 強調物理滯空高度
-        ctx.fillStyle = "#ffeb3b"; 
-        ctx.fillText(`物理滯空高度: ${flightHeightCm.toFixed(1)} cm`, 40, 110);
-        
+        // 修改順序：視覺重心 -> 最高摸高 -> 綜合評級 -> 滯空時間推估高度
         ctx.fillStyle = "#FFFFFF";
-        ctx.fillText(`視覺重心淨高: ${maxComJumpCm.toFixed(1)} cm`, 40, 150);
-        ctx.fillText(`最高摸高: ${maxReachCm.toFixed(1)} cm`, 40, 190);
+        ctx.fillText(`視覺重心淨高: ${maxComJumpCm.toFixed(1)} cm`, 40, 110);
+        ctx.fillText(`最高摸高: ${maxReachCm.toFixed(1)} cm`, 40, 150);
         
         ctx.fillStyle = "orange";
-        ctx.fillText(`綜合評級: ${jumpGradeStr}`, 40, 230);
+        ctx.fillText(`綜合評級: ${jumpGradeStr}`, 40, 190);
+
+        // 改為白色字體
+        ctx.fillStyle = "#FFFFFF"; 
+        ctx.fillText(`滯空時間推估高度: ${flightHeightCm.toFixed(1)} cm`, 40, 230);
 
         // 轉換為影像並自動彈出 UI 面板
         capturedImageURL = capCanvas.toDataURL('image/jpeg', 0.85);
