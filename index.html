@@ -232,18 +232,29 @@
             canvasElement.style.transform = "scaleX(1)";
         }
 
+        // 🌟 加入自動對焦與容錯機制
         try {
             currentStream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     deviceId: { exact: deviceId },
                     width: { ideal: 1920 },
-                    height: { ideal: 1080 }
+                    height: { ideal: 1080 },
+                    advanced: [{ focusMode: "continuous" }] 
                 }
             });
             videoElement.srcObject = currentStream;
             videoElement.play();
         } catch (err) {
-            console.error("切換鏡頭失敗", err);
+            console.error("切換鏡頭失敗，嘗試退回一般模式", err);
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+                });
+                videoElement.srcObject = currentStream;
+                videoElement.play();
+            } catch (fallbackErr) {
+                console.error("退回一般模式也失敗", fallbackErr);
+            }
         }
     }
 
